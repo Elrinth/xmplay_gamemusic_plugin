@@ -1,0 +1,13 @@
+dist/
+*.o
+*.a
+*.dll
+*.exe
+*.zip
+agent-tools/
+.objs/
+third_party/nsfplay/contrib/.objs/
+third_party/nsfplay/contrib/libnsfplay.a
+third_party/nsfplay/contrib/libnsfplay.so
+third_party/nsfplay/contrib/nsf2wav
+third_party/nsfplay/contrib/nsfmeta
