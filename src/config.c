@@ -82,7 +82,7 @@ void gc_config_defaults(gc_config *c)
 	c->fade_ms = GC_DEFAULT_FADE_MS;
 	c->auto_normalize = 1;
 	c->soft_limiter = 1;
-	c->loudness_db = 6.0f; /* loud and clear vs quiet-chip default */
+	c->loudness_db = 2.0f; /* quieter default; soft limiter still catches peaks */
 	c->stereo_width = 0.0f;
 	c->nsfplay_irq = 1;
 	c->nsfplay_n163_mux = 1;
@@ -134,9 +134,9 @@ void gc_config_defaults(gc_config *c)
 	c->trim_db[GC_FMT_CPC] = 3.0f;
 	c->trim_db[GC_FMT_HES] = 3.0f;
 	c->trim_db[GC_FMT_SGC] = 3.0f;
-	c->trim_db[GC_FMT_NSF] = 2.0f;
-	c->trim_db[GC_FMT_NSFE] = 2.0f;
-	c->trim_db[GC_FMT_NEZ] = 2.0f;
+	c->trim_db[GC_FMT_NSF] = 0.0f;
+	c->trim_db[GC_FMT_NSFE] = 0.0f;
+	c->trim_db[GC_FMT_NEZ] = 0.0f;
 	c->engine_db[GC_ENG_FATSO] = -3.0f;
 }
 
@@ -345,7 +345,7 @@ int gc_config_load(gc_config *c)
 		c->fade_ms = 30000;
 	c->auto_normalize = get_int("gamemusic", "auto_normalize", c->auto_normalize, ini) ? 1 : 0;
 	c->soft_limiter = get_int("gamemusic", "soft_limiter", c->soft_limiter, ini) ? 1 : 0;
-	get_str("gamemusic", "loudness_db", "6", buf, sizeof buf, ini);
+	get_str("gamemusic", "loudness_db", "2", buf, sizeof buf, ini);
 	c->loudness_db = (float)atof(buf);
 	get_str("gamemusic", "stereo_width", "0", buf, sizeof buf, ini);
 	c->stereo_width = (float)atof(buf);

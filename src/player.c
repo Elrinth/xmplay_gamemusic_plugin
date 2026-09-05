@@ -170,12 +170,19 @@ static int measure_one_track(gc_player *p, const gc_config *cfg, int track0)
 	int cap = gc_config_untagged_cap_ms(cfg);
 	int fade = cfg ? cfg->fade_ms : GC_DEFAULT_FADE_MS;
 	int ms = 0;
+	/* Below this, treat as failed measure so GetFileInfo never advertises
+	   1–2 s TIME (XMPlay may skip / instant-fade those subsongs). */
+	const int min_sane = 2500;
 	if (fade < 0)
 		fade = 0;
 	if (p->ops && p->ops->measure_ms)
 		ms = p->ops->measure_ms(p->eng, track0, cap, fade);
+	if (ms > 0 && ms < min_sane)
+		ms = 0;
 	if (ms <= 0)
 		ms = gc_measure_pcm_ms(p->ops, p->eng, track0, p->rate, cap, fade);
+	if (ms > 0 && ms < min_sane)
+		ms = 0;
 	if (ms <= 0)
 		return 0;
 	if (ms > GC_CAP_MS)

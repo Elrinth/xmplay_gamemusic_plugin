@@ -3,7 +3,7 @@
 #   /usr/bin/make          # host tests + 32-bit DLL
 #   /usr/bin/make dll      # dist/xmp-gamemusic.dll
 #   /usr/bin/make test     # host engine/render checks
-#   /usr/bin/make pack     # /workspace/xmp-gamemusic-1.0.3.zip
+#   /usr/bin/make pack     # /workspace/xmp-gamemusic-1.0.4.zip
 #
 # If `make` is a wrapper, invoke GNU make explicitly.
 
@@ -514,12 +514,13 @@ $(DIST)/xmp-gamemusic.dll: $(SRC)/xmp-gamemusic.cpp $(SRC)/xmp-gamemusic.def $(W
 	-file $@ 2>/dev/null || true
 
 pack: dll
-	rm -f /workspace/xmp-gamemusic-1.0.3.zip
+	rm -f /workspace/xmp-gamemusic-1.0.4.zip
 	mkdir -p $(DIST)/pack
 	cp -f $(DIST)/xmp-gamemusic.dll $(ROOT)/README.md $(DIST)/pack/
-	cd $(DIST)/pack && zip -9 /workspace/xmp-gamemusic-1.0.3.zip xmp-gamemusic.dll README.md
+	cd $(DIST)/pack && (command -v zip >/dev/null && zip -9 /workspace/xmp-gamemusic-1.0.4.zip xmp-gamemusic.dll README.md || python3 -c "import zipfile; z=zipfile.ZipFile('/workspace/xmp-gamemusic-1.0.4.zip','w',zipfile.ZIP_DEFLATED); z.write('xmp-gamemusic.dll'); z.write('README.md'); z.close()")
 	rm -rf $(DIST)/pack
-	ls -l /workspace/xmp-gamemusic-1.0.3.zip
+	ls -l /workspace/xmp-gamemusic-1.0.4.zip
+	sha256sum /workspace/xmp-gamemusic-1.0.4.zip
 
 clean:
 	rm -rf $(DIST)

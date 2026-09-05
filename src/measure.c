@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define GC_MEAS_MIN_LOOP_MS  1000
+#define GC_MEAS_MIN_LOOP_MS  8000
 #define GC_MEAS_SILENCE_MS    800
 #define GC_MEAS_TAIL_MS       400
 #define GC_MEAS_MAX_SIG      8192
@@ -57,7 +57,7 @@ int gc_measure_pcm_ms(const gc_eng_ops *ops, gc_eng_state *eng,
 	int *when;
 	int win, nsig = 0, heard = 0, last_peak = 0, silent_ms = 0;
 	int played = 0, got, i;
-	int result = 0;
+	int result = 0, from_loop = 0;
 
 	if (!ops || !ops->render || !eng || rate < 8000 || cap_ms < 500)
 		return 0;
@@ -141,6 +141,7 @@ int gc_measure_pcm_ms(const gc_eng_ops *ops, gc_eng_state *eng,
 				if (k < 2)
 					continue;
 				result = when[nsig] + (fade_ms > 0 ? fade_ms : 0);
+				from_loop = 1;
 				goto done;
 			}
 			nsig++;
@@ -155,6 +156,10 @@ done:
 		ops->set_track(eng, track0);
 	if (result > cap_ms + (fade_ms > 0 ? fade_ms : 0))
 		result = cap_ms + (fade_ms > 0 ? fade_ms : 0);
+	/* Discard eager phrase-repeat PCM "loops" only — silence/end stays. */
+	if (from_loop && result > 0 &&
+	    result < GC_MEAS_MIN_LOOP_MS + (fade_ms > 0 ? fade_ms : 0))
+		result = 0;
 	if (result > 0 && result < 200)
 		result = 200;
 	if (gc_is_dummy_length_ms(result))

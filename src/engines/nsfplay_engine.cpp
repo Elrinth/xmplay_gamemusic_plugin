@@ -288,7 +288,11 @@ static void nsf_measure_restore(nsf_state *s, int track)
 }
 
 /* NSFPlay APU-write loop detector (AUTO_DETECT / IsLooped). One-shot:
-   LOOP_NUM=1 so GetLength is intro + one loop when a loop is found. */
+   LOOP_NUM=1 so GetLength is intro + one loop when a loop is found.
+   Use NSFPlay's stock DETECT_TIME/INT (30s/5s). Aggressive 10s/1s matched
+   early phrase repeats (Zelda II Temple ~29s, Flute ~2s) as song end. */
+#define NSF_MEAS_MIN_LOOP_MS  8000
+#define NSF_MEAS_MIN_END_MS   10000
 static int nsf_measure(gc_eng_state *st, int track0, int cap_ms, int fade_ms)
 {
 	nsf_state *s = (nsf_state *)st;
@@ -300,8 +304,8 @@ static int nsf_measure(gc_eng_state *st, int track0, int cap_ms, int fade_ms)
 	saved = s->track;
 	(*s->config)["AUTO_DETECT"] = 1;
 	(*s->config)["AUTO_STOP"] = 0;
-	(*s->config)["DETECT_TIME"] = 10000;
-	(*s->config)["DETECT_INT"] = 1000;
+	(*s->config)["DETECT_TIME"] = 30000; /* NSFPlay default: long match window */
+	(*s->config)["DETECT_INT"] = 5000;   /* NSFPlay default */
 	(*s->config)["DETECT_ALT"] = 0;
 	(*s->config)["PLAY_TIME"] = cap_ms + 60000;
 	(*s->config)["FADE_TIME"] = 0;
@@ -318,6 +322,7 @@ static int nsf_measure(gc_eng_state *st, int track0, int cap_ms, int fade_ms)
 		chunk = 256;
 	while (elapsed < cap_ms) {
 		int step_ms;
+		int end, loop;
 		s->player->Skip((xgm::UINT32)chunk);
 		step_ms = (int)((int64_t)chunk * 1000 / s->rate);
 		if (step_ms < 1)
@@ -325,19 +330,21 @@ static int nsf_measure(gc_eng_state *st, int track0, int cap_ms, int fade_ms)
 		elapsed += step_ms;
 		if (!s->player->IsDetected())
 			continue;
-		{
-			int end = s->nsf->time_in_ms;
-			int loop = s->nsf->loop_in_ms;
-			if (loop >= 500 && end >= 800)
-				ms = end + (fade_ms > 0 ? fade_ms : 0);
-			else if (end >= 400 && loop <= 0)
-				ms = end + (fade_ms > 0 ? fade_ms : 400);
-		}
+		end = s->nsf->time_in_ms;
+		loop = s->nsf->loop_in_ms;
+		/* Reject absurdly short "loops" (init chatter / 1s phrase repeats). */
+		if (loop >= NSF_MEAS_MIN_LOOP_MS && end >= NSF_MEAS_MIN_END_MS)
+			ms = end + (fade_ms > 0 ? fade_ms : 0);
+		else if (loop <= 0 && end >= NSF_MEAS_MIN_END_MS)
+			ms = end + (fade_ms > 0 ? fade_ms : 400);
+		/* else: false detect — leave ms=0 so caller uses PCM/fallback */
 		break;
 	}
 	nsf_measure_restore(s, saved);
 	if (ms > GC_CAP_MS)
 		ms = GC_CAP_MS;
+	if (ms > 0 && ms < NSF_MEAS_MIN_END_MS)
+		ms = 0;
 	if (gc_is_dummy_length_ms(ms))
 		ms += 1;
 	return ms;

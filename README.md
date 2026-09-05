@@ -1,4 +1,4 @@
-# xmp-gamemusic 1.0.3
+# xmp-gamemusic 1.0.4
 
 Native **32-bit** XMPlay input plugin for chip / console music.
 Display name **Game Music**. DLL `xmp-gamemusic.dll`.
@@ -10,7 +10,7 @@ of `in_nez.dll` or `in_notsofatso.dll`.
 Intended home: `Elrinth/xmplay_gamemusic_plugin`.
 
 Classic XMPlay is **32-bit only**. This DLL is PE32 i386.
-VERSIONINFO FILEVERSION is **1.0.3.0**; `PLUGIN_XMPVER` is **1000300**.
+VERSIONINFO FILEVERSION is **1.0.4.0**; `PLUGIN_XMPVER` is **1000400**.
 
 ## Install
 
@@ -68,10 +68,19 @@ an engine. Forcing GME on FM KSS will sound wrong — that is GME, not us.
 Forced stereo widen / reverb from old `xmp-gme` are **not** defaults.
 Stereo width default is **0**.
 
+## 1.0.4
+
+- NSF measure: use NSFPlay stock `DETECT_TIME`/`DETECT_INT` (30s/5s) and reject absurdly short APU-write "loops" (Zelda II title/temple/flute no longer get ~2–29 s false TIME).
+- PCM signature loop minimum raised; tiny measured lengths fall back so `GetFileInfo` never advertises empty-looking subsongs (playlist skip 3→7).
+- Length cache key bumped to **v2** (ignores stale 1.0.x entries).
+- Quieter defaults: `loudness_db` **+2** (was +6), NSF trim **0 dB** (was +2). Soft limiter unchanged.
+- Version **1.0.4**.
+
 ## 1.0.3
 
 - NSF / chip: do not silence-cut a **measured** one-loop TIME on mid-song rests (Zelda II and similar were ending after ~1–2 s of hush).
 - `GetFileInfo` returns `XMPIN_INFO_NOSUBTAGS`; `SetPosition` accepts signed/relative subsong steps so Shift+Left reaches the previous track.
+
 
 ## Lengths and tracks
 
@@ -110,7 +119,7 @@ NSF / GBS / KSS / AY / HES are multi-song (`GetSubSongs`,
 
 ## Volume
 
-- Loud target, soft limiter, optional auto-normalize
+- Loudness default **+2 dB** (was +6), soft limiter, optional auto-normalize
 - Per-format trim (KSS/MSX especially)
 - Per-engine gain (Fatso vs NSFPlay)
 - Channel mute / per-channel level
@@ -179,7 +188,7 @@ TIME.
 make          # host tests + dist/xmp-gamemusic.dll
 make dll
 make test
-make pack     # xmp-gamemusic-1.0.3.zip = dll + README.md
+make pack     # xmp-gamemusic-1.0.4.zip = dll + README.md
 ```
 
 Emulation cores are built at `-O2`.

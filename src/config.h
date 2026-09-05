@@ -12,7 +12,7 @@ typedef struct gc_config {
 	int loop_count;
 	int fade_ms;
 	int auto_normalize;
-	float loudness_db;     /* target peak-ish, default +6 (loud) */
+	float loudness_db;     /* target peak-ish, default +2 */
 	float stereo_width;    /* 0 = off */
 	float trim_db[32];     /* index by gc_format */
 	float engine_db[8];    /* index by gc_engine */
