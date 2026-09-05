@@ -599,6 +599,28 @@ int main(void)
 				free(buf);
 			}
 			gc_player_close(p);
+			/* Measured TIME must not be silence-cut on mid-song hush. */
+			{
+				gc_config scfg = mcfg;
+				scfg.fatso_silence_ms = 1200;
+				p = gc_player_open(nsf, nsf_n, "fixture-silence.nsf", NULL, 0, &scfg);
+				if (p) {
+					int ms = gc_player_length_ms(p);
+					int need = scfg.rate * 2;
+					float *buf = (float *)calloc((size_t)4096 * 2, sizeof(float));
+					int left = need, alive = 1;
+					expect(ms > scfg.fatso_silence_ms + 500,
+					       "measured NSF TIME is longer than silence window");
+					while (left > 0 && buf) {
+						int n = gc_player_process(p, buf, 4096);
+						if (n <= 0) { alive = 0; break; }
+						left -= n;
+					}
+					expect(alive, "measured NSF is not silence-cut before advertised TIME");
+					free(buf);
+					gc_player_close(p);
+				}
+			}
 		}
 		loop_nsf = make_loop_nsf(&loop_n);
 		p = gc_player_open(loop_nsf, loop_n, "loop.nsf", NULL, 0, &mcfg);

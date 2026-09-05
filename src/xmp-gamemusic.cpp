@@ -1756,7 +1756,7 @@ static DWORD WINAPI gc_GetFileInfo(const char *filename, XMPFILE file,
 				memcpy(inf.length_src, rec.src, sizeof inf.length_src);
 				*tags = build_tags(&inf, 0);
 			}
-			return (DWORD)n;
+			return (DWORD)n | XMPIN_INFO_NOSUBTAGS;
 		}
 	}
 	file = open_if_needed(filename, file, &opened);
@@ -1790,7 +1790,7 @@ static DWORD WINAPI gc_GetFileInfo(const char *filename, XMPFILE file,
 	if (tags)
 		*tags = build_tags(&inf, 0);
 	gc_player_close(pl);
-	return (DWORD)n;
+	return (DWORD)n | XMPIN_INFO_NOSUBTAGS;
 }
 
 static DWORD WINAPI gc_Open(const char *filename, XMPFILE file)
@@ -1978,7 +1978,13 @@ static double WINAPI gc_SetPosition(DWORD pos)
 	if (pos == (DWORD)XMPIN_POS_LOOP || pos == (DWORD)XMPIN_POS_AUTOLOOP)
 		return -2.0;
 	if (pos & XMPIN_POS_SUBSONG) {
-		sub = (int)(pos & 0xFFFFu);
+		/* LOWORD is a signed subsong index: absolute >=0, or a relative
+		   step (Shift+Left sends -1). Same contract as xmp-pokey/xmp-tfmx. */
+		sub = (short)(pos & 0xFFFFu);
+		if (sub < 0)
+			sub = gc_player_current_track(g_play) + sub;
+		if (sub < 0 || sub >= gc_player_track_count(g_play))
+			return -1.0;
 		if (gc_player_set_track(g_play, sub) != 0)
 			return -1.0;
 		set_length_now(gc_player_length_ms(g_play));

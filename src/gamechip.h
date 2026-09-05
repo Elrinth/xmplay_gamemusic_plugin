@@ -9,8 +9,8 @@ extern "C" {
 #endif
 
 #define PLUGIN_NAME    "Game Music"
-#define PLUGIN_VERSION "1.0.2"
-#define PLUGIN_XMPVER  1000200 /* 1*1000000+0*10000+2*100; FILEVERSION 1.0.2.0 */
+#define PLUGIN_VERSION "1.0.3"
+#define PLUGIN_XMPVER  1000300 /* 1*1000000+0*10000+3*100; FILEVERSION 1.0.3.0 */
 
 #define GC_MAX_PATH        1024
 #define GC_MAX_TITLE       256

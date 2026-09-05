@@ -1,4 +1,4 @@
-# xmp-gamemusic 1.0.2
+# xmp-gamemusic 1.0.3
 
 Native **32-bit** XMPlay input plugin for chip / console music.
 Display name **Game Music**. DLL `xmp-gamemusic.dll`.
@@ -10,7 +10,7 @@ of `in_nez.dll` or `in_notsofatso.dll`.
 Intended home: `Elrinth/xmplay_gamemusic_plugin`.
 
 Classic XMPlay is **32-bit only**. This DLL is PE32 i386.
-VERSIONINFO FILEVERSION is **1.0.2.0**; `PLUGIN_XMPVER` is **1000200**.
+VERSIONINFO FILEVERSION is **1.0.3.0**; `PLUGIN_XMPVER` is **1000300**.
 
 ## Install
 
@@ -67,6 +67,11 @@ an engine. Forcing GME on FM KSS will sound wrong — that is GME, not us.
 
 Forced stereo widen / reverb from old `xmp-gme` are **not** defaults.
 Stereo width default is **0**.
+
+## 1.0.3
+
+- NSF / chip: do not silence-cut a **measured** one-loop TIME on mid-song rests (Zelda II and similar were ending after ~1–2 s of hush).
+- `GetFileInfo` returns `XMPIN_INFO_NOSUBTAGS`; `SetPosition` accepts signed/relative subsong steps so Shift+Left reaches the previous track.
 
 ## Lengths and tracks
 
@@ -174,7 +179,7 @@ TIME.
 make          # host tests + dist/xmp-gamemusic.dll
 make dll
 make test
-make pack     # xmp-gamemusic-1.0.2.zip = dll + README.md
+make pack     # xmp-gamemusic-1.0.3.zip = dll + README.md
 ```
 
 Emulation cores are built at `-O2`.

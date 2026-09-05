@@ -3,7 +3,7 @@
 #   /usr/bin/make          # host tests + 32-bit DLL
 #   /usr/bin/make dll      # dist/xmp-gamemusic.dll
 #   /usr/bin/make test     # host engine/render checks
-#   /usr/bin/make pack     # /workspace/xmp-gamemusic-1.0.2.zip
+#   /usr/bin/make pack     # /workspace/xmp-gamemusic-1.0.3.zip
 #
 # If `make` is a wrapper, invoke GNU make explicitly.
 
@@ -511,15 +511,15 @@ $(DIST)/xmp-gamemusic.dll: $(SRC)/xmp-gamemusic.cpp $(SRC)/xmp-gamemusic.def $(W
 	  -Wl,--kill-at -Wl,--add-stdcall-alias \
 	  -luser32 -lgdi32 -lcomctl32 -lkernel32 -Wl,-s
 	$(I686_HOST)-objdump -p $@ | grep -E 'dll name|XMPIN_GetInterface|file format' || true
-	file $@
+	-file $@ 2>/dev/null || true
 
 pack: dll
-	rm -f /workspace/xmp-gamemusic-1.0.2.zip
+	rm -f /workspace/xmp-gamemusic-1.0.3.zip
 	mkdir -p $(DIST)/pack
 	cp -f $(DIST)/xmp-gamemusic.dll $(ROOT)/README.md $(DIST)/pack/
-	cd $(DIST)/pack && zip -9 /workspace/xmp-gamemusic-1.0.2.zip xmp-gamemusic.dll README.md
+	cd $(DIST)/pack && zip -9 /workspace/xmp-gamemusic-1.0.3.zip xmp-gamemusic.dll README.md
 	rm -rf $(DIST)/pack
-	ls -l /workspace/xmp-gamemusic-1.0.2.zip
+	ls -l /workspace/xmp-gamemusic-1.0.3.zip
 
 clean:
 	rm -rf $(DIST)

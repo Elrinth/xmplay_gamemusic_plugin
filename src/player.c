@@ -577,9 +577,15 @@ int gc_player_process(gc_player *p, float *stereo, int frames)
 	if (got <= 0)
 		return 0;
 	/* Never promote silence-detect / AUTO_STOP into advertised TIME.
-	   Tagged lengths and measured / untagged-max TIME are already set. */
+	   Tagged lengths and measured / untagged-max TIME are already set.
+	   Only run post-audio silence auto-advance on the long untagged-max
+	   TIME (song may end before the scan cap). Mid-song rests in a
+	   measured one-loop must not end the track — that cut Zelda II NSF
+	   (and similar) after ~1–2 s of hush and sounded like an instant fade. */
 	if (p->silence_ms > 0 &&
-	    !(p->protect_tagged && p->track < GC_MAX_TRACKS && p->track_tagged[p->track])) {
+	    !(p->protect_tagged && p->track < GC_MAX_TRACKS && p->track_tagged[p->track]) &&
+	    !(p->length_ms > 0 && p->untagged_fallback_ms > 0 &&
+	      p->length_ms != p->untagged_fallback_ms)) {
 		int i, keep = got;
 		float thr = 1.5e-3f;
 		for (i = 0; i < got; ++i) {
