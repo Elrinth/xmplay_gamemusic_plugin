@@ -255,6 +255,9 @@ static const gc_eng_ops ops = {
 	NULL,
 	nez_voices,
 	nez_vname,
+	NULL,
+	NULL,
+	NULL,
 	NULL
 };
 

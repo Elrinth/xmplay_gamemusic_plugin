@@ -298,6 +298,9 @@ static const gc_eng_ops ops = {
 	NULL,
 	gme_voices_impl,
 	gme_vname_impl,
+	NULL,
+	NULL,
+	NULL,
 	NULL
 };
 

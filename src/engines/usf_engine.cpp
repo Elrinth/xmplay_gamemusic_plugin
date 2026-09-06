@@ -301,6 +301,9 @@ static const gc_eng_ops ops = {
 	NULL,
 	gc_usf_voices,
 	gc_usf_vname,
+	NULL,
+	NULL,
+	NULL,
 	NULL
 };
 

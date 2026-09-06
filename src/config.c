@@ -105,7 +105,7 @@ void gc_config_defaults(gc_config *c)
 	c->spc_interp = 1;
 	c->use_tag_length = 1;
 	c->measure_untagged = 1;
-	c->untagged_max_sec = 180;
+	c->untagged_max_sec = 600;
 	c->filter_hz = 210;
 	c->fatso_silence_ms = 1200;
 	c->fatso_dmc_pop = 1;

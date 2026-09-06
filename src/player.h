@@ -30,6 +30,8 @@ int gc_player_rate(const gc_player *p);
 int gc_player_voices(gc_player *p);
 const char *gc_player_voice_name(gc_player *p, int i);
 void gc_player_apply_mute(gc_player *p, const gc_config *cfg);
+/* 1 if deferred measure changed TIME since last consume; writes new ms. */
+int gc_player_length_updated(gc_player *p, int *out_ms);
 
 #ifdef __cplusplus
 }

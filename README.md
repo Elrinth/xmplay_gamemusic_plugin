@@ -1,4 +1,4 @@
-# xmp-gamemusic 1.0.4
+# xmp-gamemusic 1.0.5
 
 Native **32-bit** XMPlay input plugin for chip / console music.
 Display name **Game Music**. DLL `xmp-gamemusic.dll`.
@@ -10,7 +10,7 @@ of `in_nez.dll` or `in_notsofatso.dll`.
 Intended home: `Elrinth/xmplay_gamemusic_plugin`.
 
 Classic XMPlay is **32-bit only**. This DLL is PE32 i386.
-VERSIONINFO FILEVERSION is **1.0.4.0**; `PLUGIN_XMPVER` is **1000400**.
+VERSIONINFO FILEVERSION is **1.0.5.0**; `PLUGIN_XMPVER` is **1000500**.
 
 ## Install
 
@@ -68,6 +68,14 @@ an engine. Forcing GME on FM KSS will sound wrong — that is GME, not us.
 Forced stereo widen / reverb from old `xmp-gme` are **not** defaults.
 Stereo width default is **0**.
 
+## 1.0.5
+
+- Untagged NSF/GBS/… default TIME is **10 minutes**; Open/GetFileInfo no longer block on one-loop measure.
+- One-loop length is measured **while the track plays** (NSFPlay side detector + PCM fallback); `SetLength` updates when ready; result is cached.
+- NSFPlay playback clears detection state (`playtime_unknown`, `time_in_ms`, `loop_num`, AUTO_DETECT/STOP) so `IsStopped` cannot end a stream at ~2s while TIME is still long.
+- `nsf_render` re-arms if NSFPlay fades early before our `cap_frames`.
+- Version **1.0.5**.
+
 ## 1.0.4
 
 - NSF measure: use NSFPlay stock `DETECT_TIME`/`DETECT_INT` (30s/5s) and reject absurdly short APU-write "loops" (Zelda II title/temple/flute no longer get ~2–29 s false TIME).
@@ -90,14 +98,12 @@ NSF / GBS / KSS / AY / HES are multi-song (`GetSubSongs`,
 - Use M3U or NSFe / NSF2 duration when present (NEZ-style M3U: titles,
   `mm:ss`, optional loop/fade, 1-based NSF index, zip paths)
 - **Untagged** NSF (and GBS / KSS / AY / HES when they also lack M3U
-  times): **measured one-loop** when the General / NSF checkbox
-  **Measure untagged song lengths** is on (default). NSFPlay’s APU
-  write-stream loop detector runs first; if that does not find a
-  loop, a PCM / song-end scan is used. Length is intro + **one loop**
-  + fade. A true song-end (engine stop or fade to silence after audio
-  has started) uses last audible peak + tail. Leading INIT hush is
-  ignored. Each subsong is measured on its own — Castlevania 3’s 28
-  tracks are not given one shared TIME.
+  times): default TIME is **10 minutes** so Open stays instant. When
+  **Measure untagged song lengths** is on (default), a one-loop /
+  song-end scan runs **during playback** (NSFPlay APU detector, then
+  PCM). When it finishes, TIME updates via `SetLength` and is written
+  to the length cache for the next open. Length is intro + **one loop**
+  + fade, or last audible + tail for one-shots.
 - The scan is capped at **Max untagged / scan cap** (default **180**
   seconds). If the cap is hit with no loop and no song-end, TIME is
   that many seconds + fade. The same value is used when Measure is
@@ -188,7 +194,7 @@ TIME.
 make          # host tests + dist/xmp-gamemusic.dll
 make dll
 make test
-make pack     # xmp-gamemusic-1.0.4.zip = dll + README.md
+make pack     # xmp-gamemusic-1.0.5.zip = dll + README.md
 ```
 
 Emulation cores are built at `-O2`.

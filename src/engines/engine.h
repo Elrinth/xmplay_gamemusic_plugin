@@ -30,6 +30,10 @@ typedef struct gc_eng_ops {
 	const char *(*voice_name)(gc_eng_state *s, int i);
 	/* Optional: one-loop / song-end scan. 0 = not detected (caller may PCM-scan). */
 	int (*measure_ms)(gc_eng_state *s, int track0, int cap_ms, int fade_ms);
+	/* Optional: non-blocking measure while playback continues on another instance. */
+	int (*defer_measure_start)(gc_eng_state *s, int track0, int cap_ms, int fade_ms);
+	int (*defer_measure_poll)(gc_eng_state *s); /* 0=busy, >0=ms done, -1=no detect */
+	void (*defer_measure_cancel)(gc_eng_state *s);
 } gc_eng_ops;
 
 const gc_eng_ops *gc_eng_nez(void);

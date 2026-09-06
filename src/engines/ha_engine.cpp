@@ -394,6 +394,9 @@ static const gc_eng_ops ops = {
 	NULL,
 	ha_voices,
 	ha_vname,
+	NULL,
+	NULL,
+	NULL,
 	NULL
 };
 

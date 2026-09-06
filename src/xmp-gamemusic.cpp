@@ -2000,13 +2000,15 @@ static double WINAPI gc_SetPosition(DWORD pos)
 
 static DWORD WINAPI gc_Process(float *buf, DWORD count)
 {
-	int frames, got;
+	int frames, got, ms;
 	if (!buf || !g_play)
 		return 0;
 	frames = (int)(count / 2u);
 	if (frames <= 0)
 		return 0;
 	got = gc_player_process(g_play, buf, frames);
+	if (gc_player_length_updated(g_play, &ms))
+		set_length_now(ms);
 	if (got <= 0)
 		return 0;
 	return (DWORD)got * 2u;

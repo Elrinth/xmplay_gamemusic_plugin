@@ -42,6 +42,9 @@ static const gc_eng_ops ops = {
 	NULL,
 	fatso_voices,
 	fatso_vname,
+	NULL,
+	NULL,
+	NULL,
 	NULL
 };
 
@@ -592,6 +595,9 @@ static const gc_eng_ops ops = {
 	fatso_mixer,
 	fatso_voices,
 	fatso_vname,
+	NULL,
+	NULL,
+	NULL,
 	NULL
 };
 

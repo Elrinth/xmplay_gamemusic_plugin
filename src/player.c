@@ -28,7 +28,18 @@ struct gc_player {
 	int heard_audio;
 	int silent_frames;
 	unsigned char track_tagged[GC_MAX_TRACKS];
+	unsigned char track_pending_measure[GC_MAX_TRACKS];
 	int untagged_fallback_ms;
+	int measure_untagged;
+	int defer_cap_ms;
+	int defer_fade_ms;
+	int defer_active;        /* side-engine poll in flight for p->track */
+	int length_dirty;
+	int length_dirty_ms;
+	char cache_path[GC_MAX_PATH];
+	char cache_key[GC_MAX_PATH];
+	uint64_t cache_size;
+	int64_t cache_mtime;
 };
 
 static const gc_eng_ops *ops_for(gc_engine e)
@@ -194,15 +205,19 @@ static int measure_one_track(gc_player *p, const gc_config *cfg, int track0)
 
 static void apply_chip_defaults(gc_player *p, const gc_config *cfg, const gc_len_rec *cache)
 {
-	int i, fade, did_measure = 0, used_fallback = 0, saved;
+	int i, fade, did_cache = 0, used_fallback = 0;
 	if (!p || !chip_needs_default_play(p->format))
 		return;
 	fade = cfg ? cfg->fade_ms : GC_DEFAULT_FADE_MS;
 	if (fade < 0)
 		fade = 0;
-	saved = p->track;
+	p->measure_untagged = cfg && cfg->measure_untagged ? 1 : 0;
+	p->defer_cap_ms = gc_config_untagged_cap_ms(cfg);
+	p->defer_fade_ms = fade;
+	p->untagged_fallback_ms = gc_config_untagged_fallback_ms(cfg);
 	for (i = 0; i < p->info.track_count && i < GC_MAX_TRACKS; ++i) {
 		int ms = p->info.tracks[i].duration_ms;
+		p->track_pending_measure[i] = 0;
 		if (gc_is_dummy_length_ms(ms))
 			ms = 0;
 		if (ms > 0) {
@@ -214,37 +229,118 @@ static void apply_chip_defaults(gc_player *p, const gc_config *cfg, const gc_len
 		if (cache && i < cache->track_count && cache->duration_ms[i] > 0 &&
 		    !gc_is_dummy_length_ms(cache->duration_ms[i])) {
 			p->info.tracks[i].duration_ms = cache->duration_ms[i];
-			did_measure = 1;
+			did_cache = 1;
 			continue;
 		}
-		if (cfg && cfg->measure_untagged) {
-			ms = measure_one_track(p, cfg, i);
-			if (ms > 0) {
-				p->info.tracks[i].duration_ms = ms;
-				did_measure = 1;
-				continue;
-			}
-			used_fallback = 1;
-		}
+		/* Do not block Open/GetFileInfo on heavy one-loop measure.
+		   Advertise ~10 minutes now; measure during Process (NSFPlay) or
+		   on first set_track (other engines). */
 		p->info.tracks[i].duration_ms = default_chip_play_ms(cfg, &p->info.tracks[i]);
+		used_fallback = 1;
+		if (p->measure_untagged)
+			p->track_pending_measure[i] = 1;
 	}
-	if (p->ops && p->ops->set_track)
-		p->ops->set_track(p->eng, saved);
-	p->track = saved;
 	p->length_ms = p->info.tracks[p->track].duration_ms;
 	if (p->length_ms > 0)
 		p->cap_frames = (int)((int64_t)p->length_ms * p->rate / 1000);
-	p->untagged_fallback_ms = gc_config_untagged_fallback_ms(cfg);
 	if (p->track_tagged[p->track]) {
 		if (!p->info.length_src[0] || !strcmp(p->info.length_src, "unknown"))
 			snprintf(p->info.length_src, sizeof p->info.length_src, "embedded/tag");
-	} else if (did_measure && p->length_ms != gc_config_untagged_fallback_ms(cfg)) {
+	} else if (did_cache) {
 		snprintf(p->info.length_src, sizeof p->info.length_src, "measured");
 	} else {
 		snprintf(p->info.length_src, sizeof p->info.length_src, "untagged-max");
 	}
-	(void)fade;
 	(void)used_fallback;
+}
+
+static void cache_store_lengths(gc_player *p)
+{
+	gc_len_rec rec;
+	if (!p || !p->cache_path[0] || !p->cache_key[0])
+		return;
+	gc_len_rec_from_info(&rec, &p->info);
+	snprintf(rec.src, sizeof rec.src, "measured");
+	gc_len_cache_put(p->cache_path, p->cache_key, p->cache_size, p->cache_mtime, &rec);
+}
+
+static void apply_measured_length(gc_player *p, int track0, int ms)
+{
+	if (!p || track0 < 0 || track0 >= GC_MAX_TRACKS || ms <= 0)
+		return;
+	if (ms > GC_CAP_MS)
+		ms = GC_CAP_MS;
+	if (gc_is_dummy_length_ms(ms))
+		ms += 1;
+	p->info.tracks[track0].duration_ms = ms;
+	p->track_pending_measure[track0] = 0;
+	if (track0 == p->track) {
+		int played_ms = (int)((int64_t)p->frames_played * 1000 / (p->rate > 0 ? p->rate : 1));
+		p->length_ms = ms;
+		p->cap_frames = (int)((int64_t)ms * p->rate / 1000);
+		/* If measure finished after we already passed the new end, stop soon. */
+		if (played_ms >= ms && p->cap_frames > p->frames_played)
+			p->cap_frames = p->frames_played + (p->rate / 20);
+		else if (played_ms >= ms)
+			p->cap_frames = p->frames_played;
+		snprintf(p->info.length_src, sizeof p->info.length_src, "measured");
+		p->length_dirty = 1;
+		p->length_dirty_ms = ms;
+	}
+	cache_store_lengths(p);
+}
+
+static void defer_measure_start_track(gc_player *p, int track0)
+{
+	if (!p || !p->ops || track0 < 0 || track0 >= GC_MAX_TRACKS)
+		return;
+	if (!p->track_pending_measure[track0] || !p->measure_untagged)
+		return;
+	if (p->ops->defer_measure_cancel)
+		p->ops->defer_measure_cancel(p->eng);
+	p->defer_active = 0;
+	if (p->ops->defer_measure_start &&
+	    p->ops->defer_measure_start(p->eng, track0, p->defer_cap_ms, p->defer_fade_ms)) {
+		p->defer_active = 1;
+		return;
+	}
+	/* Engines without side-measure: one-track sync measure on first select. */
+	if (p->ops->measure_ms) {
+		gc_config tmp;
+		int ms, saved = p->track;
+		gc_config_defaults(&tmp);
+		tmp.measure_untagged = 1;
+		tmp.untagged_max_sec = p->defer_cap_ms / 1000;
+		if (tmp.untagged_max_sec < 10)
+			tmp.untagged_max_sec = 10;
+		tmp.fade_ms = p->defer_fade_ms;
+		ms = measure_one_track(p, &tmp, track0);
+		if (p->ops->set_track)
+			p->ops->set_track(p->eng, saved);
+		p->track = saved;
+		if (ms > 0)
+			apply_measured_length(p, track0, ms);
+		else
+			p->track_pending_measure[track0] = 0;
+	}
+}
+
+static void defer_measure_poll(gc_player *p)
+{
+	int r;
+	if (!p || !p->defer_active || !p->ops || !p->ops->defer_measure_poll)
+		return;
+	r = p->ops->defer_measure_poll(p->eng);
+	if (r == 0)
+		return;
+	p->defer_active = 0;
+	if (r > 0)
+		apply_measured_length(p, p->track, r);
+	else {
+		/* Detector gave up — try a quick PCM scan on the side? Keep 10-min.
+		   Mark pending clear so we do not spin forever. */
+		p->track_pending_measure[p->track] = 0;
+	}
 }
 
 static void reset_silence_state(gc_player *p)
@@ -467,21 +563,27 @@ gc_player *gc_player_open(const unsigned char *data, size_t len,
 		snprintf(p->info.length_src, sizeof p->info.length_src, "M3U");
 	}
 	{
-		gc_len_rec cached, rec;
+		gc_len_rec cached;
 		int have_cache = 0;
 		const char *key = filename && filename[0] ? filename : music_name;
 		uint64_t sz = gc_file_size(filename);
 		int64_t mt = gc_file_mtime(filename);
 		if (sz == 0)
 			sz = (uint64_t)len;
-		if (local.len_cache_path[0] && key && key[0])
+		if (local.len_cache_path[0] && key && key[0]) {
+			size_t kn = strlen(key);
+			if (kn >= sizeof p->cache_key)
+				kn = sizeof p->cache_key - 1;
+			memcpy(p->cache_key, key, kn);
+			p->cache_key[kn] = '\0';
+			memcpy(p->cache_path, local.len_cache_path, sizeof p->cache_path);
+			p->cache_size = sz;
+			p->cache_mtime = mt;
 			have_cache = gc_len_cache_get(local.len_cache_path, key, sz, mt, &cached);
-		apply_chip_defaults(p, &local, have_cache ? &cached : NULL);
-		if (local.len_cache_path[0] && key && key[0] &&
-		    chip_needs_default_play(p->format)) {
-			gc_len_rec_from_info(&rec, &p->info);
-			gc_len_cache_put(local.len_cache_path, key, sz, mt, &rec);
 		}
+		apply_chip_defaults(p, &local, have_cache ? &cached : NULL);
+		/* Deferred measure starts on first Process/set_track — avoids a second
+		   NSFPlay Load during GetFileInfo open/close (iconv abort on this host). */
 	}
 	if (p->length_ms > 0 && !p->info.length_src[0])
 		snprintf(p->info.length_src, sizeof p->info.length_src, "embedded/tag");
@@ -548,6 +650,7 @@ int gc_player_set_track(gc_player *p, int track0)
 		p->cap_frames = (int)((int64_t)p->length_ms * p->rate / 1000);
 	} else
 		p->cap_frames = (int)((int64_t)GC_CAP_MS * p->rate / 1000);
+	defer_measure_start_track(p, track0);
 	return 0;
 }
 
@@ -573,6 +676,10 @@ int gc_player_process(gc_player *p, float *stereo, int frames)
 	int got, left;
 	if (!p || !p->ops || !p->ops->render || !stereo || frames <= 0)
 		return 0;
+	if (p->track < GC_MAX_TRACKS && p->track_pending_measure[p->track] &&
+	    !p->defer_active)
+		defer_measure_start_track(p, p->track);
+	defer_measure_poll(p);
 	if (p->cap_frames > 0) {
 		left = p->cap_frames - p->frames_played;
 		if (left <= 0)
@@ -591,6 +698,7 @@ int gc_player_process(gc_player *p, float *stereo, int frames)
 	   (and similar) after ~1–2 s of hush and sounded like an instant fade. */
 	if (p->silence_ms > 0 &&
 	    !(p->protect_tagged && p->track < GC_MAX_TRACKS && p->track_tagged[p->track]) &&
+	    !(p->track < GC_MAX_TRACKS && p->track_pending_measure[p->track]) &&
 	    !(p->length_ms > 0 && p->untagged_fallback_ms > 0 &&
 	      p->length_ms != p->untagged_fallback_ms)) {
 		int i, keep = got;
@@ -701,4 +809,15 @@ void gc_player_apply_mute(gc_player *p, const gc_config *cfg)
 		p->ops->set_mixer(p->eng, cfg);
 	else if (p->ops->set_mute)
 		p->ops->set_mute(p->eng, cfg->mute, level);
+}
+
+
+int gc_player_length_updated(gc_player *p, int *out_ms)
+{
+	if (!p || !p->length_dirty)
+		return 0;
+	p->length_dirty = 0;
+	if (out_ms)
+		*out_ms = p->length_dirty_ms;
+	return 1;
 }

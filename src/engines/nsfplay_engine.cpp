@@ -15,9 +15,48 @@ struct nsf_state {
 	int length_ms;
 	int fade_ms;
 	int loops;
+	/* Side player for deferred one-loop measure (playback stays uninterrupted). */
+	xgm::NSF *mnsf;
+	xgm::NSFPlayer *mplayer;
+	xgm::NSFPlayerConfig *mconfig;
+	unsigned char *data_copy;
+	size_t data_len;
+	int m_active;
+	int m_track;
+	int m_elapsed;
+	int m_cap;
+	int m_fade;
+	int m_phase; /* 0=detect Skip, 1=PCM silence scan */
+	int m_heard;
+	int m_last_peak;
+	int m_silent;
+	int m_detect_cap;
 };
 
 extern "C" {
+
+/* NSFPlay CheckTerminal ends the stream from GetLength/FADE — not our cap_frames.
+   Keep detection off and playtime unknown so IsStopped only follows a huge default
+   (we end via player.c). Always clear leftover DetectLoop time_in_ms. */
+static void nsf_playback_clear(nsf_state *s)
+{
+	int play_ms;
+	if (!s || !s->config || !s->nsf)
+		return;
+	play_ms = GC_CAP_MS;
+	(*s->config)["AUTO_DETECT"] = 0;
+	(*s->config)["AUTO_STOP"] = 0;
+	(*s->config)["PLAY_TIME"] = play_ms;
+	(*s->config)["FADE_TIME"] = s->fade_ms > 0 ? s->fade_ms : GC_DEFAULT_FADE_MS;
+	(*s->config)["LOOP_NUM"] = s->loops > 0 ? s->loops : 1;
+	s->nsf->playtime_unknown = true;
+	s->nsf->time_in_ms = -1;
+	s->nsf->loop_in_ms = -1;
+	s->nsf->fade_in_ms = s->fade_ms > 0 ? s->fade_ms : GC_DEFAULT_FADE_MS;
+	s->nsf->loop_num = -1;
+	s->nsf->playlist_mode = false;
+	s->nsf->SetDefaults(play_ms, s->nsf->fade_in_ms, s->loops > 0 ? s->loops : 1);
+}
 
 static int nsf_can(gc_format fmt)
 {
@@ -65,6 +104,49 @@ static int track_length_ms(xgm::NSF *nsf, int track0, int fade_ms, int loops)
 	return ms;
 }
 
+static void nsf_free_measure(nsf_state *s)
+{
+	if (!s)
+		return;
+	delete s->mplayer;
+	delete s->mnsf;
+	delete s->mconfig;
+	s->mplayer = NULL;
+	s->mnsf = NULL;
+	s->mconfig = NULL;
+	s->m_active = 0;
+}
+
+static int nsf_ensure_measure(nsf_state *s)
+{
+	if (!s || !s->data_copy || s->data_len < 8)
+		return 0;
+	if (s->mplayer && s->mnsf && s->mconfig)
+		return 1;
+	nsf_free_measure(s);
+	s->mnsf = new xgm::NSF();
+	s->mplayer = new xgm::NSFPlayer();
+	s->mconfig = new xgm::NSFPlayerConfig();
+	if (!s->mnsf->Load(s->data_copy, (xgm::UINT32)s->data_len)) {
+		nsf_free_measure(s);
+		return 0;
+	}
+	(*s->mconfig)["MASTER_VOLUME"] = 256;
+	(*s->mconfig)["RATE"] = s->rate;
+	(*s->mconfig)["NCH"] = 2;
+	(*s->mconfig)["IRQ_ENABLE"] = (*s->config)["IRQ_ENABLE"].GetInt();
+	(*s->mconfig)["REGION"] = (*s->config)["REGION"].GetInt();
+	(*s->mconfig)["N163_OPTION0"] = (*s->config)["N163_OPTION0"].GetInt();
+	s->mplayer->SetConfig(s->mconfig);
+	if (!s->mplayer->Load(s->mnsf)) {
+		nsf_free_measure(s);
+		return 0;
+	}
+	s->mplayer->SetPlayFreq((double)s->rate);
+	s->mplayer->SetChannels(2);
+	return 1;
+}
+
 static gc_eng_state *nsf_open(const unsigned char *data, size_t len, int rate,
                               const gc_config *cfg)
 {
@@ -76,6 +158,13 @@ static gc_eng_state *nsf_open(const unsigned char *data, size_t len, int rate,
 	s = (nsf_state *)calloc(1, sizeof *s);
 	if (!s)
 		return NULL;
+	s->data_copy = (unsigned char *)malloc(len);
+	if (!s->data_copy) {
+		free(s);
+		return NULL;
+	}
+	memcpy(s->data_copy, data, len);
+	s->data_len = len;
 	s->nsf = new xgm::NSF();
 	s->player = new xgm::NSFPlayer();
 	s->config = new xgm::NSFPlayerConfig();
@@ -83,38 +172,29 @@ static gc_eng_state *nsf_open(const unsigned char *data, size_t len, int rate,
 		delete s->player;
 		delete s->nsf;
 		delete s->config;
+		free(s->data_copy);
 		free(s);
 		return NULL;
 	}
-	/* Full NSF2: IRQ (non-returning INIT / suppress PLAY live in nsf2_bits),
-	   mixe + RATE + regn/Dendy are parsed from the file; we must not disable IRQ. */
 	(*s->config)["MASTER_VOLUME"] = 256;
 	(*s->config)["RATE"] = rate;
 	(*s->config)["NCH"] = 2;
 	(*s->config)["IRQ_ENABLE"] = (cfg && !cfg->nsfplay_irq) ? 0 : 1;
-	(*s->config)["REGION"] = cfg ? cfg->nsfplay_region : 0; /* 0 = auto NTSC/PAL/Dendy */
+	(*s->config)["REGION"] = cfg ? cfg->nsfplay_region : 0;
 	(*s->config)["N163_OPTION0"] = (cfg && !cfg->nsfplay_n163_mux) ? 0 : 1;
-	/* Do not let INIT hush or a false short loop become TIME / IsStopped. */
-	(*s->config)["AUTO_DETECT"] = 0;
-	(*s->config)["AUTO_STOP"] = 0;
-	(*s->config)["LOOP_NUM"] = cfg ? cfg->loop_count : 1;
-	(*s->config)["FADE_TIME"] = cfg ? cfg->fade_ms : GC_DEFAULT_FADE_MS;
-	(*s->config)["PLAY_TIME"] = GC_DEFAULT_PLAY_MS;
-	(*s->config)["APU2_OPTION5"] = 0; /* triangle not force-muted */
-	(*s->config)["APU2_OPTION7"] = 0; /* no randomize triangle */
+	(*s->config)["APU2_OPTION5"] = 0;
+	(*s->config)["APU2_OPTION7"] = 0;
 	s->fade_ms = cfg ? cfg->fade_ms : GC_DEFAULT_FADE_MS;
 	s->loops = cfg ? cfg->loop_count : 1;
-	s->nsf->time_in_ms = -1;
-	s->nsf->loop_in_ms = -1;
-	s->nsf->fade_in_ms = s->fade_ms;
-	s->nsf->playtime_unknown = true;
-	s->nsf->playlist_mode = false;
-	s->nsf->SetDefaults(GC_DEFAULT_PLAY_MS, s->fade_ms, s->loops);
+	if (s->loops < 1)
+		s->loops = 1;
+	nsf_playback_clear(s);
 	s->player->SetConfig(s->config);
 	if (!s->player->Load(s->nsf)) {
 		delete s->player;
 		delete s->nsf;
 		delete s->config;
+		free(s->data_copy);
 		free(s);
 		return NULL;
 	}
@@ -123,6 +203,7 @@ static gc_eng_state *nsf_open(const unsigned char *data, size_t len, int rate,
 	s->track = s->nsf->start ? (s->nsf->start - 1) : 0;
 	if (s->track < 0)
 		s->track = 0;
+	nsf_playback_clear(s);
 	s->player->SetSong(s->track);
 	s->player->Reset();
 	s->rate = rate;
@@ -135,9 +216,19 @@ static void nsf_close(gc_eng_state *st)
 	nsf_state *s = (nsf_state *)st;
 	if (!s)
 		return;
+#if defined(__linux__) && !defined(_WIN32)
+	/* NSFPlay + glibc iconv can abort in title/SJIS teardown after a second
+	   Load (deferred measure). Leak C++ objects on the Linux host harness;
+	   Windows XMPlay frees normally. */
+	(void)s->mplayer; (void)s->mnsf; (void)s->mconfig;
+	(void)s->player; (void)s->nsf; (void)s->config;
+#else
+	nsf_free_measure(s);
 	delete s->player;
 	delete s->nsf;
 	delete s->config;
+#endif
+	free(s->data_copy);
 	free(s);
 }
 
@@ -221,6 +312,7 @@ static int nsf_set_track(gc_eng_state *st, int track0)
 	if (track0 < 0 || track0 >= n)
 		return -1;
 	s->track = track0;
+	nsf_playback_clear(s);
 	s->player->SetSong(track0);
 	s->player->Reset();
 	s->length_ms = track_length_ms(s->nsf, track0, s->fade_ms, s->loops);
@@ -234,11 +326,22 @@ static int nsf_render(gc_eng_state *st, float *stereo, int frames)
 	int i;
 	if (!s || !s->player || !stereo || frames <= 0)
 		return 0;
-	if (s->player->IsStopped())
-		return 0;
+	/* Ignore NSFPlay IsStopped until our advertised cap — detection leftovers
+	   or FADE_TIME vs a short PLAY_TIME must not kill a 10-minute untagged play.
+	   Caller (player.c) ends the stream via cap_frames. */
 	tmp = (int16_t *)malloc((size_t)frames * 2u * sizeof(int16_t));
 	if (!tmp)
 		return 0;
+	if (s->player->IsStopped()) {
+		/* Re-arm if NSFPlay faded early while we still want audio. */
+		nsf_playback_clear(s);
+		s->player->SetSong(s->track);
+		s->player->Reset();
+		if (s->player->IsStopped()) {
+			free(tmp);
+			return 0;
+		}
+	}
 	s->player->Render(tmp, (xgm::UINT32)frames);
 	for (i = 0; i < frames * 2; ++i)
 		stereo[i] = (float)tmp[i] / 32768.0f;
@@ -252,6 +355,7 @@ static int nsf_seek(gc_eng_state *st, int ms)
 	xgm::UINT32 samples;
 	if (!s || !s->player)
 		return -1;
+	nsf_playback_clear(s);
 	s->player->Reset();
 	if (ms <= 0)
 		return 0;
@@ -270,18 +374,9 @@ static int nsf_len(gc_eng_state *st, int track0)
 
 static void nsf_measure_restore(nsf_state *s, int track)
 {
-	if (!s || !s->config || !s->player || !s->nsf)
+	if (!s || !s->player || !s->nsf)
 		return;
-	(*s->config)["AUTO_DETECT"] = 0;
-	(*s->config)["AUTO_STOP"] = 0;
-	(*s->config)["PLAY_TIME"] = GC_DEFAULT_PLAY_MS;
-	(*s->config)["FADE_TIME"] = s->fade_ms;
-	(*s->config)["LOOP_NUM"] = s->loops;
-	s->nsf->playtime_unknown = true;
-	s->nsf->time_in_ms = -1;
-	s->nsf->loop_in_ms = -1;
-	s->nsf->fade_in_ms = s->fade_ms;
-	s->nsf->SetDefaults(GC_DEFAULT_PLAY_MS, s->fade_ms, s->loops);
+	nsf_playback_clear(s);
 	s->player->SetSong(track);
 	s->player->Reset();
 	s->track = track;
@@ -289,10 +384,30 @@ static void nsf_measure_restore(nsf_state *s, int track)
 
 /* NSFPlay APU-write loop detector (AUTO_DETECT / IsLooped). One-shot:
    LOOP_NUM=1 so GetLength is intro + one loop when a loop is found.
-   Use NSFPlay's stock DETECT_TIME/INT (30s/5s). Aggressive 10s/1s matched
-   early phrase repeats (Zelda II Temple ~29s, Flute ~2s) as song end. */
+   Use NSFPlay's stock DETECT_TIME/INT (30s/5s). */
 #define NSF_MEAS_MIN_LOOP_MS  8000
 #define NSF_MEAS_MIN_END_MS   10000
+
+static int nsf_eval_detect(xgm::NSF *nsf, int fade_ms)
+{
+	int end, loop, ms = 0;
+	if (!nsf)
+		return 0;
+	end = nsf->time_in_ms;
+	loop = nsf->loop_in_ms;
+	if (loop >= NSF_MEAS_MIN_LOOP_MS && end >= NSF_MEAS_MIN_END_MS)
+		ms = end + (fade_ms > 0 ? fade_ms : 0);
+	else if (loop <= 0 && end >= NSF_MEAS_MIN_END_MS)
+		ms = end + (fade_ms > 0 ? fade_ms : 400);
+	if (ms > GC_CAP_MS)
+		ms = GC_CAP_MS;
+	if (ms > 0 && ms < NSF_MEAS_MIN_END_MS)
+		ms = 0;
+	if (gc_is_dummy_length_ms(ms))
+		ms += 1;
+	return ms;
+}
+
 static int nsf_measure(gc_eng_state *st, int track0, int cap_ms, int fade_ms)
 {
 	nsf_state *s = (nsf_state *)st;
@@ -304,8 +419,8 @@ static int nsf_measure(gc_eng_state *st, int track0, int cap_ms, int fade_ms)
 	saved = s->track;
 	(*s->config)["AUTO_DETECT"] = 1;
 	(*s->config)["AUTO_STOP"] = 0;
-	(*s->config)["DETECT_TIME"] = 30000; /* NSFPlay default: long match window */
-	(*s->config)["DETECT_INT"] = 5000;   /* NSFPlay default */
+	(*s->config)["DETECT_TIME"] = 30000;
+	(*s->config)["DETECT_INT"] = 5000;
 	(*s->config)["DETECT_ALT"] = 0;
 	(*s->config)["PLAY_TIME"] = cap_ms + 60000;
 	(*s->config)["FADE_TIME"] = 0;
@@ -314,7 +429,9 @@ static int nsf_measure(gc_eng_state *st, int track0, int cap_ms, int fade_ms)
 	s->nsf->time_in_ms = -1;
 	s->nsf->loop_in_ms = -1;
 	s->nsf->fade_in_ms = fade_ms > 0 ? fade_ms : 0;
+	s->nsf->loop_num = -1;
 	s->nsf->playlist_mode = false;
+	s->nsf->SetDefaults(cap_ms + 60000, fade_ms > 0 ? fade_ms : 0, 1);
 	s->player->SetSong(track0);
 	s->player->Reset();
 	chunk = s->rate / 4;
@@ -322,7 +439,6 @@ static int nsf_measure(gc_eng_state *st, int track0, int cap_ms, int fade_ms)
 		chunk = 256;
 	while (elapsed < cap_ms) {
 		int step_ms;
-		int end, loop;
 		s->player->Skip((xgm::UINT32)chunk);
 		step_ms = (int)((int64_t)chunk * 1000 / s->rate);
 		if (step_ms < 1)
@@ -330,27 +446,160 @@ static int nsf_measure(gc_eng_state *st, int track0, int cap_ms, int fade_ms)
 		elapsed += step_ms;
 		if (!s->player->IsDetected())
 			continue;
-		end = s->nsf->time_in_ms;
-		loop = s->nsf->loop_in_ms;
-		/* Reject absurdly short "loops" (init chatter / 1s phrase repeats). */
-		if (loop >= NSF_MEAS_MIN_LOOP_MS && end >= NSF_MEAS_MIN_END_MS)
-			ms = end + (fade_ms > 0 ? fade_ms : 0);
-		else if (loop <= 0 && end >= NSF_MEAS_MIN_END_MS)
-			ms = end + (fade_ms > 0 ? fade_ms : 400);
-		/* else: false detect — leave ms=0 so caller uses PCM/fallback */
+		ms = nsf_eval_detect(s->nsf, fade_ms);
 		break;
 	}
 	nsf_measure_restore(s, saved);
-	if (ms > GC_CAP_MS)
-		ms = GC_CAP_MS;
-	if (ms > 0 && ms < NSF_MEAS_MIN_END_MS)
-		ms = 0;
-	if (gc_is_dummy_length_ms(ms))
-		ms += 1;
 	return ms;
 }
 
-/* Shared logical mixer: 2A03, FDS, VRC6, MMC5, N163, VRC7, 5B. */
+static int nsf_defer_start(gc_eng_state *st, int track0, int cap_ms, int fade_ms)
+{
+	nsf_state *s = (nsf_state *)st;
+	int n;
+	if (!s || !nsf_ensure_measure(s))
+		return 0;
+	n = s->mnsf->total_songs > 0 ? s->mnsf->total_songs : s->mnsf->songs;
+	if (n < 1)
+		n = 1;
+	if (track0 < 0 || track0 >= n)
+		return 0;
+	if (cap_ms < 2000)
+		cap_ms = 2000;
+	s->m_active = 1;
+	s->m_track = track0;
+	s->m_elapsed = 0;
+	s->m_cap = cap_ms;
+	s->m_fade = fade_ms > 0 ? fade_ms : 0;
+	s->m_phase = 0;
+	s->m_heard = 0;
+	s->m_last_peak = 0;
+	s->m_silent = 0;
+	s->m_detect_cap = cap_ms;
+	/* Zelda II title detects ~100s in; keep headroom below full 10-min Skip. */
+	if (s->m_detect_cap > 180000)
+		s->m_detect_cap = 180000;
+
+	(*s->mconfig)["AUTO_DETECT"] = 1;
+	(*s->mconfig)["AUTO_STOP"] = 0;
+	(*s->mconfig)["DETECT_TIME"] = 30000;
+	(*s->mconfig)["DETECT_INT"] = 5000;
+	(*s->mconfig)["DETECT_ALT"] = 0;
+	(*s->mconfig)["PLAY_TIME"] = cap_ms + 60000;
+	(*s->mconfig)["FADE_TIME"] = 0;
+	(*s->mconfig)["LOOP_NUM"] = 1;
+	s->mnsf->playtime_unknown = true;
+	s->mnsf->time_in_ms = -1;
+	s->mnsf->loop_in_ms = -1;
+	s->mnsf->fade_in_ms = s->m_fade;
+	s->mnsf->loop_num = -1;
+	s->mnsf->playlist_mode = false;
+	s->mnsf->SetDefaults(cap_ms + 60000, s->m_fade, 1);
+	s->mplayer->SetSong(track0);
+	s->mplayer->Reset();
+	return 1;
+}
+
+static int nsf_defer_poll(gc_eng_state *st)
+{
+	nsf_state *s = (nsf_state *)st;
+	int chunk, step_ms, budget, advanced = 0;
+	if (!s || !s->m_active || !s->mplayer || !s->mnsf)
+		return -1;
+	chunk = s->rate / 4;
+	if (chunk < 256)
+		chunk = 256;
+	budget = s->rate; /* ~1s measure audio per poll — finish ahead of realtime */
+
+	if (s->m_phase == 0) {
+		while (advanced < budget && s->m_elapsed < s->m_detect_cap) {
+			s->mplayer->Skip((xgm::UINT32)chunk);
+			step_ms = (int)((int64_t)chunk * 1000 / s->rate);
+			if (step_ms < 1)
+				step_ms = 1;
+			s->m_elapsed += step_ms;
+			advanced += chunk;
+			if (s->mplayer->IsDetected()) {
+				int ms = nsf_eval_detect(s->mnsf, s->m_fade);
+				s->m_active = 0;
+				return ms > 0 ? ms : -1;
+			}
+		}
+		if (s->m_elapsed < s->m_detect_cap)
+			return 0;
+		/* No APU loop — restart for PCM silence / song-end scan on side player. */
+		(*s->mconfig)["AUTO_DETECT"] = 0;
+		(*s->mconfig)["AUTO_STOP"] = 0;
+		s->mnsf->playtime_unknown = true;
+		s->mnsf->time_in_ms = -1;
+		s->mnsf->loop_in_ms = -1;
+		s->mnsf->fade_in_ms = s->m_fade;
+		s->mnsf->loop_num = -1;
+		s->mnsf->SetDefaults(s->m_cap + 60000, s->m_fade, 1);
+		s->mplayer->SetSong(s->m_track);
+		s->mplayer->Reset();
+		s->m_phase = 1;
+		s->m_elapsed = 0;
+		s->m_heard = 0;
+		s->m_last_peak = 0;
+		s->m_silent = 0;
+	}
+
+	/* PCM phase: Render on side player, last-peak + silence tail. */
+	{
+		int16_t *tmp = (int16_t *)malloc((size_t)chunk * 2u * sizeof(int16_t));
+		if (!tmp)
+			return -1;
+		while (advanced < budget && s->m_elapsed < s->m_cap) {
+			int i, loud = 0;
+			s->mplayer->Render(tmp, (xgm::UINT32)chunk);
+			step_ms = (int)((int64_t)chunk * 1000 / s->rate);
+			if (step_ms < 1) step_ms = 1;
+			s->m_elapsed += step_ms;
+			advanced += chunk;
+			for (i = 0; i < chunk * 2; ++i) {
+				int v = tmp[i] < 0 ? -tmp[i] : tmp[i];
+				if (v > 400) { loud = 1; break; }
+			}
+			if (!s->m_heard) {
+				if (loud) {
+					s->m_heard = 1;
+					s->m_last_peak = s->m_elapsed;
+					s->m_silent = 0;
+				}
+			} else if (!loud) {
+				s->m_silent += step_ms;
+				if (s->m_silent >= 800) {
+					int ms = s->m_last_peak + (s->m_fade > 0 ? s->m_fade : 400);
+					free(tmp);
+					s->m_active = 0;
+					if (ms > GC_CAP_MS) ms = GC_CAP_MS;
+					if (ms < 2500) { return -1; }
+					if (gc_is_dummy_length_ms(ms)) ms += 1;
+					return ms;
+				}
+			} else {
+				s->m_last_peak = s->m_elapsed;
+				s->m_silent = 0;
+			}
+		}
+		free(tmp);
+	}
+	if (s->m_elapsed >= s->m_cap) {
+		s->m_active = 0;
+		return -1;
+	}
+	return 0;
+}
+
+static void nsf_defer_cancel(gc_eng_state *st)
+{
+	nsf_state *s = (nsf_state *)st;
+	if (!s)
+		return;
+	s->m_active = 0;
+}
+
 static const int nsfplay_from_logical[29] = {
 	0, 1, 2, 3, 4, 5,
 	12, 13, 14,
@@ -449,7 +698,10 @@ static const gc_eng_ops ops = {
 	nsf_mixer,
 	nsf_voices,
 	nsf_vname,
-	nsf_measure
+	nsf_measure,
+	nsf_defer_start,
+	nsf_defer_poll,
+	nsf_defer_cancel
 };
 
 const gc_eng_ops *gc_eng_nsfplay(void)

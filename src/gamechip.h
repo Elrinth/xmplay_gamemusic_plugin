@@ -9,8 +9,8 @@ extern "C" {
 #endif
 
 #define PLUGIN_NAME    "Game Music"
-#define PLUGIN_VERSION "1.0.4"
-#define PLUGIN_XMPVER  1000400 /* 1*1000000+0*10000+4*100; FILEVERSION 1.0.4.0 */
+#define PLUGIN_VERSION "1.0.5"
+#define PLUGIN_XMPVER  1000500 /* 1*1000000+0*10000+5*100; FILEVERSION 1.0.5.0 */
 
 #define GC_MAX_PATH        1024
 #define GC_MAX_TITLE       256
@@ -20,7 +20,7 @@ extern "C" {
 #define GC_DEFAULT_RATE    48000
 #define GC_DEFAULT_FADE_MS 3000
 #define GC_DEFAULT_LOOPS   1
-#define GC_DEFAULT_PLAY_MS 180000 /* untagged fallback / scan cap default (seconds*1000) */
+#define GC_DEFAULT_PLAY_MS 600000 /* untagged default TIME = 10 minutes */
 #define GC_CAP_MS          (10 * 60 * 1000) /* hard safety cap, never a dummy TIME */
 /* Library placeholders — never expose these as TIME. */
 #define GC_DUMMY_GME_MS    150000 /* GME unknown play_length: 2:30 */
