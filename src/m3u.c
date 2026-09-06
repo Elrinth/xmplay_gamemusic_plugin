@@ -53,20 +53,30 @@ static const char *basename_of(const char *path)
 	return s;
 }
 
+/* NEZplug / nsfe2m3u playlist times:
+   1 field = seconds (possibly fractional),
+   2 fields = M:SS[.frac],
+   3 fields = H:MM:SS[.frac]  — NOT min:sec:ms (that made 0:02:09 → ~2s). */
 int gc_parse_mmss(const char *s)
 {
-	int min = 0, sec = 0, ms = 0, n;
+	double a = 0.0, b = 0.0, c = 0.0;
+	int n;
 	if (!s || !s[0])
 		return 0;
-	if (strchr(s, ':')) {
-		n = sscanf(s, "%d:%d:%d", &min, &sec, &ms);
-		if (n == 3)
-			return min * 60000 + sec * 1000 + (ms < 1000 ? ms : ms * 10);
-		if (n >= 2)
-			return min * 60000 + sec * 1000;
-		return 0;
+	while (*s == ' ' || *s == '\t')
+		s++;
+	if (!strchr(s, ':')) {
+		/* plain seconds, e.g. "12" or "2.5" / EXTINF */
+		return (int)(atof(s) * 1000.0 + 0.5);
 	}
-	return atoi(s) * 1000;
+	n = sscanf(s, "%lf:%lf:%lf", &a, &b, &c);
+	if (n == 3)
+		return (int)((a * 3600.0 + b * 60.0 + c) * 1000.0 + 0.5);
+	if (n == 2)
+		return (int)((a * 60.0 + b) * 1000.0 + 0.5);
+	if (n == 1)
+		return (int)(a * 1000.0 + 0.5);
+	return 0;
 }
 
 static int path_ieq(const char *a, const char *b)

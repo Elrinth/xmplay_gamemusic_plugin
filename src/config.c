@@ -598,7 +598,7 @@ gc_engine gc_config_engine_for(const gc_config *c, gc_format fmt)
 
 int gc_config_untagged_cap_ms(const gc_config *c)
 {
-	int sec = c && c->untagged_max_sec > 0 ? c->untagged_max_sec : 180;
+	int sec = c && c->untagged_max_sec > 0 ? c->untagged_max_sec : 600;
 	int ms;
 	if (sec < 10)
 		sec = 10;

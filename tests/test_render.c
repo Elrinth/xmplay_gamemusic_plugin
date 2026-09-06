@@ -434,6 +434,16 @@ int main(void)
 	expect(gc_is_dummy_length_ms(300000), "NEZ 5:00 dummy detected");
 	expect(!gc_is_dummy_length_ms(10000), "real 10s is not dummy");
 
+	/* 1.0.8: NEZ/nsfe2m3u H:MM:SS — 0:02:09 is 2m9s, not ~2s. */
+	expect(gc_parse_mmss("0:02:09") == 129000, "parse H:MM:SS 0:02:09 = 129s");
+	expect(gc_parse_mmss("0:01:24") == 84000, "parse H:MM:SS 0:01:24 = 84s");
+	expect(gc_parse_mmss("0:00:02.5") == 2500, "parse H:MM:SS.frac 0:00:02.5");
+	expect(gc_parse_mmss("0:00:05.5") == 5500, "parse H:MM:SS.frac 0:00:05.5");
+	expect(gc_parse_mmss("1:24") == 84000, "parse M:SS 1:24");
+	expect(gc_parse_mmss("0:10") == 10000, "parse M:SS 0:10");
+	expect(gc_parse_mmss("12") == 12000, "parse plain seconds");
+	expect(gc_parse_mmss("2.5") == 2500, "parse fractional seconds");
+
 	expect(gc_m3u_parse(m3u, strlen(m3u), "fixture.nsf", &m3u_inf), "parse NEZ M3U");
 	expect(m3u_inf.track_count == 3, "M3U has 3 tracks including last");
 	expect(m3u_inf.tracks[2].duration_ms == 10000, "M3U last length 0:10 not 3:00");
@@ -468,6 +478,80 @@ int main(void)
 		       gc_player_engine(p) == GC_ENG_FATSO,
 		       "NSF engine is one of NSFPlay/GME/NEZ/Fatso");
 		gc_player_close(p);
+	}
+
+	/* Short M3U / EXTINF must not become XMPlay TIME for NSF (≤2s misparse). */
+	{
+		const char *short_m3u =
+			"#EXTINF:2,Title\n"
+			"fixture.nsf::NSF,1,Title,0:02\n";
+		gc_info sm;
+		expect(gc_m3u_parse(short_m3u, strlen(short_m3u), "fixture.nsf", &sm),
+		       "parse short M3U 0:02");
+		expect(sm.tracks[0].duration_ms == 2000, "parser stores 0:02 as 2000ms");
+		p = gc_player_open(nsf, nsf_n, "fixture.nsf", short_m3u, strlen(short_m3u), &cfg);
+		expect(p != NULL, "open NSF with short M3U");
+		if (p) {
+			int ms = gc_player_length_ms(p);
+			expect(ms >= 55000, "short M3U 0:02 does not advertise <55s TIME");
+			expect(ms >= 600000 || ms == gc_config_untagged_fallback_ms(&cfg),
+			       "short M3U falls back to ~10-min placeholder");
+			gc_player_info(p, &inf);
+			expect(strcmp(inf.tracks[0].title, "Title") == 0 ||
+			       inf.tracks[0].title[0] != 0,
+			       "short M3U title still merges");
+			gc_player_close(p);
+		}
+	}
+
+	/* Real Zelda II nsfe2m3u: 0:02:09 = 129s Title BGM (not ~2s). */
+	{
+		FILE *nf = fopen("/workspace/uploads/zelda2-user.nsf", "rb");
+		FILE *mf = fopen("/workspace/uploads/zelda2-user.m3u", "rb");
+		if (nf && mf) {
+			unsigned char *zdata = NULL;
+			char *ztext = NULL;
+			long zsz, msz;
+			fseek(nf, 0, SEEK_END); zsz = ftell(nf); rewind(nf);
+			fseek(mf, 0, SEEK_END); msz = ftell(mf); rewind(mf);
+			if (zsz > 0 && msz > 0) {
+				zdata = (unsigned char *)malloc((size_t)zsz);
+				ztext = (char *)malloc((size_t)msz + 1);
+				if (zdata && ztext &&
+				    fread(zdata, 1, (size_t)zsz, nf) == (size_t)zsz &&
+				    fread(ztext, 1, (size_t)msz, mf) == (size_t)msz) {
+					gc_info zm;
+					ztext[msz] = '\0';
+					expect(gc_m3u_parse(ztext, (size_t)msz, NULL, &zm),
+					       "parse Zelda II user M3U");
+					expect(zm.tracks[0].duration_ms == 129000,
+					       "Zelda II M3U track1 0:02:09 = 129000ms");
+					expect(zm.tracks[1].duration_ms == 84000,
+					       "Zelda II M3U track2 0:01:24 = 84000ms");
+					/* filename NULL so playlist paths need not match the upload name */
+					p = gc_player_open(zdata, (size_t)zsz, NULL,
+					                  ztext, (size_t)msz, &cfg);
+					expect(p != NULL, "open Zelda II NSF + user M3U");
+					if (p) {
+						int ms = gc_player_length_ms(p);
+						expect(ms == 129000 || (ms >= 128000 && ms <= 132000),
+						       "Zelda II track1 Open length ~129s not ~2s");
+						expect(ms != 2000 && ms != 2009 && ms < 600000,
+						       "Zelda II track1 is not 2s misparse");
+						gc_player_info(p, &inf);
+						expect(strstr(inf.tracks[0].title, "Title") != NULL,
+						       "Zelda II Title BGM title from M3U");
+						gc_player_close(p);
+					}
+				}
+				free(zdata);
+				free(ztext);
+			}
+		} else {
+			fprintf(stdout, "skip Zelda II user NSF/M3U (not in /workspace/uploads)\n");
+		}
+		if (nf) fclose(nf);
+		if (mf) fclose(mf);
 	}
 
 	cfg.engine_gbs = GC_ENG_AUTO;

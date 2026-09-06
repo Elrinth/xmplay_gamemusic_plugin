@@ -1,4 +1,4 @@
-# xmp-gamemusic 1.0.7
+# xmp-gamemusic 1.0.8
 
 Native **32-bit** XMPlay input plugin for chip / console music.
 Display name **Game Music**. DLL `xmp-gamemusic.dll`.
@@ -10,7 +10,7 @@ of `in_nez.dll` or `in_notsofatso.dll`.
 Intended home: `Elrinth/xmplay_gamemusic_plugin`.
 
 Classic XMPlay is **32-bit only**. This DLL is PE32 i386.
-VERSIONINFO FILEVERSION is **1.0.7.0**; `PLUGIN_XMPVER` is **1000700**.
+VERSIONINFO FILEVERSION is **1.0.8.0**; `PLUGIN_XMPVER` is **1000800**.
 
 ## Install
 
@@ -67,6 +67,15 @@ an engine. Forcing GME on FM KSS will sound wrong — that is GME, not us.
 
 Forced stereo widen / reverb from old `xmp-gme` are **not** defaults.
 Stereo width default is **0**.
+
+## 1.0.8
+
+- **NEZ / nsfe2m3u M3U times:** `gc_parse_mmss` parses **H:MM:SS[.frac]** correctly (`0:02:09` → **129 s**, not ~2 s). Also `M:SS`, plain seconds, and fractional `0:00:02.5`.
+- Sidecar / archive M3U durations below **2.5 s** are never applied as play TIME (failed-parse / EXTINF garbage); titles still merge.
+- `GetFileInfo` / `SetLength` never advertise absurd shorts (&lt;2.5 s) — use the **10-minute** placeholder instead.
+- `GC_DEFAULT_PLAY_MS` / untagged fallback remain **600000** (10 min) everywhere.
+- Host check: Zelda II real M3U track 1 → **~129000** ms; synthetic `0:02` / `#EXTINF:2` still does not become a 2 s XMPlay length.
+- Version **1.0.8**.
 
 ## 1.0.7
 
@@ -212,7 +221,7 @@ TIME.
 make          # host tests + dist/xmp-gamemusic.dll
 make dll
 make test
-make pack     # xmp-gamemusic-1.0.7.zip = dll + README.md
+make pack     # xmp-gamemusic-1.0.8.zip = dll + README.md
 ```
 
 Emulation cores are built at `-O2`.

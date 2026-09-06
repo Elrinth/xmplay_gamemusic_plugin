@@ -31,7 +31,7 @@ typedef struct gc_config {
 	int filter_hz;
 	int use_tag_length;    /* prefer M3U / NSFe / PSF length */
 	int measure_untagged;  /* default on: one-loop / song-end scan */
-	int untagged_max_sec;  /* fallback + measure scan cap; default 180 */
+	int untagged_max_sec;  /* fallback + measure scan cap; default 600 (10 min) */
 	int fatso_pal;
 	int fatso_silence_ms;
 	int fatso_highpass;

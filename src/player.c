@@ -232,6 +232,9 @@ static void apply_chip_defaults(gc_player *p, const gc_config *cfg, const gc_len
 		p->track_pending_measure[i] = 0;
 		if (gc_is_dummy_length_ms(ms))
 			ms = 0;
+		/* Absurd shorts (<2.5s) are never trusted as chip TIME (bad M3U). */
+		if (ms > 0 && ms < GC_MEAS_MIN_SANE_MS)
+			ms = 0;
 		if (ms > 0) {
 			p->track_tagged[i] = 1;
 			p->info.tracks[i].duration_ms = ms;
@@ -384,6 +387,16 @@ static void reset_silence_state(gc_player *p)
 	p->silent_frames = 0;
 }
 
+/* M3U play TIME for NSF family: reject absurd shorts (<2.5s) that come from
+   a failed H:MM:SS parse (e.g. old 0:02:09 → 2009ms). Titles always merge. */
+static int m3u_duration_ok(gc_format fmt, int ms)
+{
+	if (ms < GC_MEAS_MIN_SANE_MS)
+		return 0;
+	(void)fmt;
+	return 1;
+}
+
 static void merge_m3u(gc_info *info, const gc_info *m3u)
 {
 	int i, n;
@@ -398,7 +411,8 @@ static void merge_m3u(gc_info *info, const gc_info *m3u)
 		if (m3u->tracks[i].title[0])
 			memcpy(info->tracks[i].title, m3u->tracks[i].title,
 			       sizeof info->tracks[i].title);
-		if (m3u->tracks[i].duration_ms > 0)
+		if (m3u->tracks[i].duration_ms > 0 &&
+		    m3u_duration_ok(info->format, m3u->tracks[i].duration_ms))
 			info->tracks[i].duration_ms = m3u->tracks[i].duration_ms;
 		if (m3u->tracks[i].loop_ms > 0)
 			info->tracks[i].loop_ms = m3u->tracks[i].loop_ms;

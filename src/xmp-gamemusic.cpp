@@ -440,6 +440,9 @@ static void set_length_now(int play_ms)
 	float sec;
 	if (!xmpfin || !xmpfin->SetLength || play_ms <= 0)
 		return;
+	/* Never advertise absurd shorts to XMPlay (failed M3U parse → ~2s). */
+	if (play_ms < GC_MEAS_MIN_SANE_MS)
+		play_ms = GC_DEFAULT_PLAY_MS;
 	sec = (float)play_ms / 1000.0f;
 	if (sec > 0.0f && sec < 86400.0f)
 		xmpfin->SetLength(sec, TRUE);
@@ -1741,10 +1744,12 @@ static DWORD WINAPI gc_GetFileInfo(const char *filename, XMPFILE file,
 				if (lens) {
 					/* Confident cache hit, else 10-min placeholder — never a
 					   short sync false-measure. */
-					for (i = 0; i < n; ++i)
-						lens[i] = rec.duration_ms[i] > 0
-						              ? (float)rec.duration_ms[i] / 1000.0f
-						              : (float)GC_DEFAULT_PLAY_MS / 1000.0f;
+					for (i = 0; i < n; ++i) {
+						int ms = rec.duration_ms[i];
+						if (ms < GC_MEAS_MIN_SANE_MS)
+							ms = GC_DEFAULT_PLAY_MS;
+						lens[i] = (float)ms / 1000.0f;
+					}
 				}
 				*length = lens;
 			}
@@ -1783,8 +1788,10 @@ static DWORD WINAPI gc_GetFileInfo(const char *filename, XMPFILE file,
 		if (lens) {
 			for (i = 0; i < n; ++i) {
 				int ms = inf.tracks[i].duration_ms;
-				/* Tagged length, or measured / untagged-max for chip tunes. */
-				lens[i] = ms > 0 ? (float)ms / 1000.0f : 0.0f;
+				/* Never advertise 0 / absurd shorts — 10-min placeholder. */
+				if (ms < GC_MEAS_MIN_SANE_MS)
+					ms = GC_DEFAULT_PLAY_MS;
+				lens[i] = (float)ms / 1000.0f;
 			}
 		}
 		*length = lens;
