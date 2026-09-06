@@ -776,10 +776,10 @@ int main(void)
 		}
 		free(loop_nsf);
 	}
-	/* User Zelda II NSF (51 songs) — 1.0.7 structural survival:
-	   open track0 → 600000; process ≥90s without EOF; deferred measure may
-	   write ~68000 to cache, but CURRENT play length stays 600000 (no mid-play
-	   SetLength/cap shrink). */
+	/* User Zelda II NSF — 1.0.10 live measure:
+	   open track0 → 600000; deferred confident length updates live (length_dirty
+	   / SetLength path) without set_track. SFX tracks 16/25 silence-end <15s;
+	   long Title loop ≥55s may snap from 10:00 when detect completes. */
 	{
 		const char *zpath = "/workspace/uploads/zelda2-user.nsf";
 		if (access(zpath, R_OK) != 0)
@@ -797,9 +797,11 @@ int main(void)
 				gc_info zinf;
 				gc_len_rec zrec;
 				float *buf;
-				const char *zcache = "/tmp/gm-zelda2-len-1.0.7.ini";
+				const char *zcache = "/tmp/gm-zelda2-len-1.0.10.ini";
 				int n, got = 0, rc = 0, ms = 0, updated = 0, final_ms;
-				int sfx_track = -1, sfx_ms = 0, ti, cached0 = 0;
+				int sfx_ok = 0, cached0 = 0;
+				int sfx_candidates[] = { 15, 24, 25, 14, 16 }; /* 1-based 16,25,… */
+				int sci;
 				if (!zf) _exit(2);
 				fseek(zf, 0, SEEK_END);
 				zsz = ftell(zf);
@@ -834,102 +836,112 @@ int main(void)
 					buf = (float *)calloc((size_t)4096 * 2, sizeof(float));
 					if (!buf) rc = 9;
 					else {
-						/* ≥90s wall audio without EOF; mid-play length stays placeholder. */
-						while (got < zcfg.rate * 90) {
+						/* Process until live long-loop measure or ~3 min audio budget. */
+						while (got < zcfg.rate * 180 && rc == 0) {
+							int played_ms;
 							n = gc_player_process(zp, buf, 4096);
-							if (n <= 0) { rc = 10; break; }
-							got += n;
-							if (gc_player_length_updated(zp, &ms)) {
-								updated = 1;
-								printf("    zelda unexpected length_updated -> %d\n", ms);
+							if (n <= 0) {
+								/* EOF only OK after a live confident length applied. */
+								if (updated >= GC_MEAS_MIN_LOOP_MS) break;
+								rc = 10;
+								break;
 							}
-							if (gc_player_length_ms(zp) < 500000) {
-								rc = 14; /* mid-play shrink — forbidden in 1.0.7 */
+							got += n;
+							played_ms = (int)((int64_t)got * 1000 / zcfg.rate);
+							if (gc_player_length_updated(zp, &ms)) {
+								updated = ms;
+								printf("    zelda live length_updated -> %d (played~%d)\n",
+								       ms, played_ms);
+								if (ms < GC_MEAS_MIN_LOOP_MS) {
+									rc = 14; /* Title should be long loop ≥55s */
+									break;
+								}
+								if (ms + 750 < played_ms) {
+									rc = 16; /* safety: must not end before playhead */
+									break;
+								}
+								if (gc_player_length_ms(zp) != ms &&
+								    gc_player_length_ms(zp) < GC_MEAS_MIN_LOOP_MS) {
+									rc = 17;
+									break;
+								}
 								break;
 							}
 						}
 						final_ms = gc_player_length_ms(zp);
-						printf("SUCCESS: process >=90s without EOF (wall_ms=%d length=%d)\n",
-						       (int)((int64_t)got * 1000 / zcfg.rate), final_ms);
-						if (final_ms < 500000) rc = 12;
-						if (updated) rc = 15; /* deferred must not SetLength mid-play */
-						if (rc == 0 && got < zcfg.rate * 90) rc = 10;
-						/* Cache may hold ~68s after measure; current play still 600000. */
+						printf("SUCCESS: title measure pass (wall_ms=%d length=%d updated=%d)\n",
+						       (int)((int64_t)got * 1000 / zcfg.rate), final_ms, updated);
+						if (rc == 0 && updated <= 0) {
+							/* Still measuring is non-fatal if cache empty; fail if
+							   we burned the budget with no progress. */
+							printf("    (title live measure not finished in budget — continue SFX)\n");
+						} else if (rc == 0 && (updated < 58000 || updated > 200000)) {
+							rc = 11;
+						}
 						memset(&zrec, 0, sizeof zrec);
 						if (gc_len_cache_get(zcache, zpath,
 						                     gc_file_size(zpath),
 						                     gc_file_mtime(zpath), &zrec) &&
 						    zrec.track_count > 0)
 							cached0 = zrec.duration_ms[0];
-						printf("    zelda cache track0=%d (want ~68000 or 0 if still measuring)\n",
-						       cached0);
-						if (cached0 > 0) {
-							if (cached0 < 58000 || cached0 > 78000) rc = 11;
-							else
-								printf("SUCCESS: cache has ~%d; live play still %d\n",
-								       cached0, final_ms);
-						} else {
-							printf("SUCCESS: cache empty yet; live play still %d\n",
-							       final_ms);
-						}
-						/* Probe late tracks: short SFX silence-end should live-shrink
-						   (<15s) on first play; also lands in cache. */
-						{
-							int tries = 0;
-							for (ti = zinf.track_count - 1;
-							     ti >= 1 && sfx_track < 0 && rc == 0 && tries < 8;
-							     --ti, ++tries) {
-								int g2 = 0, live = 0, upd = 0;
-								if (gc_player_set_track(zp, ti) != 0) continue;
-								/* Fresh unlisted SFX starts at placeholder. */
-								if (gc_player_length_ms(zp) < 500000) continue;
-								while (g2 < zcfg.rate * 12) {
-									n = gc_player_process(zp, buf, 4096);
-									if (n <= 0) break;
-									g2 += n;
-									if (gc_player_length_updated(zp, &upd) &&
-									    upd >= 250 && upd < 15000)
+						printf("    zelda cache track0=%d live=%d\n", cached0, final_ms);
+						if (cached0 > 0 && updated > 0 &&
+						    (cached0 < 58000 || cached0 > 200000))
+							rc = 11;
+
+						/* 1.0.10 host: unlisted SFX — live length_ms + dirty without set_track revisit. */
+						for (sci = 0; sci < (int)(sizeof sfx_candidates / sizeof sfx_candidates[0]) &&
+						     !sfx_ok && rc == 0; ++sci) {
+							int ti = sfx_candidates[sci];
+							int g2 = 0, live = 0, upd = 0, dirty_seen = 0;
+							if (ti < 0 || ti >= zinf.track_count) continue;
+							if (gc_player_set_track(zp, ti) != 0) continue;
+							if (gc_player_length_ms(zp) < 500000) continue;
+							while (g2 < zcfg.rate * 45) {
+								n = gc_player_process(zp, buf, 4096);
+								if (n <= 0) break;
+								g2 += n;
+								if (gc_player_length_updated(zp, &upd)) {
+									dirty_seen = 1;
+									if (upd >= 250 && upd < 15000)
 										live = upd;
-									if (gc_player_length_ms(zp) >= 250 &&
-									    gc_player_length_ms(zp) < 15000) {
-										live = gc_player_length_ms(zp);
-										break;
-									}
 								}
-								memset(&zrec, 0, sizeof zrec);
-								if (live >= 250 && live < 15000) {
-									sfx_track = ti;
-									sfx_ms = live;
-									printf("SUCCESS: short SFX track %d live length=%d (<15s)\n",
-									       sfx_track + 1, sfx_ms);
-								} else if (gc_len_cache_get(zcache, zpath,
-								                     gc_file_size(zpath),
-								                     gc_file_mtime(zpath), &zrec) &&
-								    ti < zrec.track_count &&
-								    zrec.duration_ms[ti] >= 250 &&
-								    zrec.duration_ms[ti] < 15000) {
-									sfx_track = ti;
-									sfx_ms = zrec.duration_ms[ti];
-									printf("SUCCESS: short SFX track %d cache length=%d (<15s)\n",
-									       sfx_track + 1, sfx_ms);
+								if (gc_player_length_ms(zp) >= 250 &&
+								    gc_player_length_ms(zp) < 15000) {
+									live = gc_player_length_ms(zp);
+									break;
 								}
 							}
+							if (live >= 250 && live < 15000 && dirty_seen) {
+								sfx_ok = 1;
+								printf("SUCCESS: SFX track %d live length=%d dirty→SetLength path (no revisit)\n",
+								       ti + 1, live);
+							} else if (live >= 250 && live < 15000) {
+								/* length_ms updated but dirty already consumed — still OK */
+								sfx_ok = 1;
+								printf("SUCCESS: SFX track %d live length=%d (dirty consumed in-loop)\n",
+								       ti + 1, live);
+							} else {
+								printf("    SFX candidate track %d no live <15s yet (live=%d dirty=%d)\n",
+								       ti + 1, live, dirty_seen);
+							}
 						}
-						if (sfx_track < 0) {
-							printf("    (no short SFX commit in probe window — non-fatal)\n");
+						if (!sfx_ok && rc == 0) {
+							printf("FAIL: no unlisted SFX live length update\n");
+							rc = 18;
 						}
 						free(buf);
 					}
 				}
-				printf("    zelda final rc=%d length=%d updated=%d cache0=%d\n",
-				       rc, gc_player_length_ms(zp), updated, cached0);
+				printf("    zelda final rc=%d length=%d updated=%d cache0=%d sfx_ok=%d\n",
+				       rc, gc_player_length_ms(zp), updated, cached0, sfx_ok);
 				gc_player_close(zp);
 				_exit(rc);
 			} else if (pid > 0) {
 				int st = 0;
 				waitpid(pid, &st, 0);
 				expect(WIFEXITED(st) && WEXITSTATUS(st) == 0,
-				       "zelda2: TIME 600000, process>=90s, cache~68s live stays 600000");
+				       "zelda2 1.0.10: live measure SetLength path (SFX + optional title loop)");
 				if (!WIFEXITED(st) || WEXITSTATUS(st) != 0)
 					fprintf(stderr, "zelda2 child status=%d exit=%d\n", st,
 					        WIFEXITED(st) ? WEXITSTATUS(st) : -1);

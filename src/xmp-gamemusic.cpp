@@ -2018,11 +2018,12 @@ static DWORD WINAPI gc_Process(float *buf, DWORD count)
 	if (frames <= 0)
 		return 0;
 	got = gc_player_process(g_play, buf, frames);
-	/* 1.0.9: allow live SetLength shrink for short SFX silence-end (<15s).
-	   Long-music deferred measure stays cache-only (no dirty / no shrink). */
+	/* 1.0.10: any live_ok commit sets length_dirty (SFX <15s and long loops
+	   ≥55s). apply_measured_length already refused unsafe shrinks below the
+	   playhead — always SetLength when dirty so the XMPlay UI updates on
+	   first play without requiring Shift+Left. */
 	if (gc_player_length_updated(g_play, &ms)) {
-		int cur = gc_player_length_ms(g_play);
-		if (ms > 0 && (cur <= 0 || ms >= cur || ms < GC_MEAS_SFX_MAX_MS))
+		if (ms >= GC_MEAS_SFX_MIN_MS)
 			set_length_now(ms);
 	}
 	if (got <= 0)

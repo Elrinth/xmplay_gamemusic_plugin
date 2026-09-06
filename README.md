@@ -1,4 +1,4 @@
-# xmp-gamemusic 1.0.9
+# xmp-gamemusic 1.0.10
 
 Native **32-bit** XMPlay input plugin for chip / console music.
 Display name **Game Music**. DLL `xmp-gamemusic.dll`.
@@ -10,7 +10,7 @@ of `in_nez.dll` or `in_notsofatso.dll`.
 Intended home: `Elrinth/xmplay_gamemusic_plugin`.
 
 Classic XMPlay is **32-bit only**. This DLL is PE32 i386.
-VERSIONINFO FILEVERSION is **1.0.9.0**; `PLUGIN_XMPVER` is **1000900**.
+VERSIONINFO FILEVERSION is **1.0.10.0**; `PLUGIN_XMPVER` is **1001000**.
 
 ## Install
 
@@ -67,6 +67,14 @@ an engine. Forcing GME on FM KSS will sound wrong — that is GME, not us.
 
 Forced stereo widen / reverb from old `xmp-gme` are **not** defaults.
 Stereo width default is **0**.
+
+## 1.0.10
+
+- **Live SetLength for confident deferred measure:** when the side-player commits a confident length, always update the **current** track (`length_ms`, `cap_frames`, `length_dirty` → Process `SetLength`) on first play — for both short SFX silence-end **&lt;15 s** and long one-loop music **≥55 s**.
+- **Playhead safety:** do not `SetLength` to a value less than `played_ms − ~750 ms` unless it is a short SFX silence-end finishing at/near the playhead. Never apply absurd **&lt;250 ms**. Fragile mid-band false loops (15–55 s) still discarded.
+- First play of unlisted SFX (e.g. Zelda II tracks 16/25) should show ~4–5 s in XMPlay when measure finishes (no Shift+Left needed). Unlisted music (tracks 3/8/13/19) should snap from **10:00** to the measured ~1–3 min when detect completes, without ending early if measured &gt; played.
+- Keep M3U H:MM:SS and Title `0:02:09` → 129 s from 1.0.8/1.0.9.
+- Version **1.0.10**.
 
 ## 1.0.9
 
@@ -230,7 +238,7 @@ TIME.
 make          # host tests + dist/xmp-gamemusic.dll
 make dll
 make test
-make pack     # xmp-gamemusic-1.0.9.zip = dll + README.md
+make pack     # xmp-gamemusic-1.0.10.zip = dll + README.md
 ```
 
 Emulation cores are built at `-O2`.

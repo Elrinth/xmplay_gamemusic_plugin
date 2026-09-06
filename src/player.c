@@ -296,11 +296,12 @@ static void cache_store_lengths(gc_player *p)
 
 /* Commit a confident measure to info + length cache.
    live_ok: apply to length_ms/cap_frames and notify XMPlay (SetLength).
-   Long-music deferred results pass live_ok=0 (cache only; next set_track).
-   Short SFX silence-end (<15s) may pass live_ok=1 to shrink the 10-min
-   placeholder on first play without requiring Shift+Left revisit. */
+   1.0.10: deferred measure always requests live_ok for confident lengths
+   (short SFX silence-end <15s AND long one-loop ≥55s). Safety: do not
+   shrink below played_ms−slack unless SFX silence-end is near the playhead. */
 static void apply_measured_length(gc_player *p, int track0, int ms, int live_ok)
 {
+	int played_ms, slack;
 	if (!p || track0 < 0 || track0 >= GC_MAX_TRACKS || ms <= 0)
 		return;
 	if (ms > GC_CAP_MS)
@@ -312,20 +313,32 @@ static void apply_measured_length(gc_player *p, int track0, int ms, int live_ok)
 		p->track_pending_measure[track0] = 0;
 		return;
 	}
+	/* Always store confident length in info + cache (Shift+Left / reopen). */
 	p->info.tracks[track0].duration_ms = ms;
 	p->track_pending_measure[track0] = 0;
 	cache_store_lengths(p);
-	if (!live_ok)
-		return; /* cache only — current play keeps placeholder TIME/cap */
-	if (track0 == p->track) {
-		p->length_ms = ms;
-		p->cap_frames = (int)((int64_t)ms * p->rate / 1000);
-		snprintf(p->info.length_src, sizeof p->info.length_src, "measured");
-		/* Mid-play SFX: mark dirty so Process calls SetLength. set_track/Open
-		   also call set_length_now; a second SetLength is harmless. */
-		p->length_dirty = 1;
-		p->length_dirty_ms = ms;
+	if (!live_ok || track0 != p->track)
+		return;
+	/* Never live-apply absurd crumbs (<250ms) — confident filter already. */
+	played_ms = 0;
+	if (p->rate > 0)
+		played_ms = (int)((int64_t)p->frames_played * 1000 / p->rate);
+	slack = 750;
+	if (ms + slack < played_ms) {
+		/* Measured end is behind the playhead — would EOF immediately.
+		   Allow only short SFX silence-end finishing at/near the playhead. */
+		if (!(ms < GC_MEAS_SFX_MAX_MS && played_ms - ms <= 2500))
+			return; /* cache-only; keep current placeholder TIME/cap */
 	}
+	p->length_ms = ms;
+	p->cap_frames = (int)((int64_t)ms * p->rate / 1000);
+	/* SFX near playhead: never set cap behind frames already delivered. */
+	if (p->cap_frames < p->frames_played)
+		p->cap_frames = p->frames_played;
+	snprintf(p->info.length_src, sizeof p->info.length_src, "measured");
+	/* Mark dirty so Process calls SetLength on this same poll cycle. */
+	p->length_dirty = 1;
+	p->length_dirty_ms = ms;
 }
 
 static void defer_measure_start_track(gc_player *p, int track0)
@@ -373,9 +386,9 @@ static void defer_measure_poll(gc_player *p)
 		return;
 	p->defer_active = 0;
 	if (r > 0) {
-		/* Live shrink only for short SFX silence-end; long loops stay cache-only. */
-		int live = (r < GC_MEAS_SFX_MAX_MS) ? 1 : 0;
-		apply_measured_length(p, p->track, r, live);
+		/* 1.0.10: always attempt live update for confident SFX + long loops.
+		   apply_measured_length enforces playhead safety / ≥55s loop rule. */
+		apply_measured_length(p, p->track, r, 1);
 	} else {
 		/* Detector gave up — keep 10-min. Clear pending so we do not spin. */
 		p->track_pending_measure[p->track] = 0;
@@ -764,7 +777,7 @@ int gc_player_process(gc_player *p, float *stereo, int frames)
 	}
 	/* Live silence-cut: OFF for NSF family (always — deferred lengths), and
 	   OFF for any untagged chip placeholder / pending measure. Deferred
-	   measure owns SFX silence-ends in the cache only. Never EOF early. */
+	   measure owns SFX silence-ends (live SetLength in 1.0.10). Never EOF early. */
 	{
 		int allow_sil = 0;
 		if (p->silence_ms > 0) {

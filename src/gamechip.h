@@ -9,8 +9,8 @@ extern "C" {
 #endif
 
 #define PLUGIN_NAME    "Game Music"
-#define PLUGIN_VERSION "1.0.9"
-#define PLUGIN_XMPVER  1000900 /* 1*1000000+0*10000+9*100; FILEVERSION 1.0.9.0 */
+#define PLUGIN_VERSION "1.0.10"
+#define PLUGIN_XMPVER  1001000 /* 1*1000000+0*10000+10*100; FILEVERSION 1.0.10.0 */
 
 #define GC_MAX_PATH        1024
 #define GC_MAX_TITLE       256
@@ -29,9 +29,9 @@ extern "C" {
 #define GC_M3U_MIN_MS          250 /* reject only absurd M3U / parse junk */
 #define GC_MEAS_MIN_SANE_MS   GC_MEAS_SFX_MIN_MS /* alias: measured + advertise floor */
 #define GC_MEAS_SILENCE_MS      800 /* trailing hush before silence-end commit */
-/* 1.0.7+: mid-play long-music measure is cache-only until next open/set_track. */
 /* 1.0.8: NEZ M3U H:MM:SS (0:02:09 = 129s, not ~2s). */
 /* 1.0.9: trust M3U [250ms,15s] SFX + live silence-end SetLength for unlisted SFX. */
+/* 1.0.10: live SetLength for confident deferred measure (SFX + long loops ≥55s). */
 /* Library placeholders — never expose these as TIME. */
 #define GC_DUMMY_GME_MS    150000 /* GME unknown play_length: 2:30 */
 #define GC_DUMMY_3MIN_MS   180000
