@@ -434,7 +434,7 @@ int main(void)
 	expect(gc_is_dummy_length_ms(300000), "NEZ 5:00 dummy detected");
 	expect(!gc_is_dummy_length_ms(10000), "real 10s is not dummy");
 
-	/* 1.0.8: NEZ/nsfe2m3u H:MM:SS — 0:02:09 is 2m9s, not ~2s. */
+	/* 1.0.8/1.0.9: NEZ/nsfe2m3u H:MM:SS — 0:02:09 is 2m9s, not ~2s. */
 	expect(gc_parse_mmss("0:02:09") == 129000, "parse H:MM:SS 0:02:09 = 129s");
 	expect(gc_parse_mmss("0:01:24") == 84000, "parse H:MM:SS 0:01:24 = 84s");
 	expect(gc_parse_mmss("0:00:02.5") == 2500, "parse H:MM:SS.frac 0:00:02.5");
@@ -480,26 +480,40 @@ int main(void)
 		gc_player_close(p);
 	}
 
-	/* Short M3U / EXTINF must not become XMPlay TIME for NSF (≤2s misparse). */
+	/* 1.0.9: absurd M3U crumbs (<250ms) still rejected; short SFX trusted. */
 	{
-		const char *short_m3u =
-			"#EXTINF:2,Title\n"
-			"fixture.nsf::NSF,1,Title,0:02\n";
+		const char *crumb_m3u =
+			"fixture.nsf::NSF,1,Title,0:00:00.1\n";
 		gc_info sm;
-		expect(gc_m3u_parse(short_m3u, strlen(short_m3u), "fixture.nsf", &sm),
-		       "parse short M3U 0:02");
-		expect(sm.tracks[0].duration_ms == 2000, "parser stores 0:02 as 2000ms");
-		p = gc_player_open(nsf, nsf_n, "fixture.nsf", short_m3u, strlen(short_m3u), &cfg);
-		expect(p != NULL, "open NSF with short M3U");
+		expect(gc_m3u_parse(crumb_m3u, strlen(crumb_m3u), "fixture.nsf", &sm),
+		       "parse crumb M3U 0:00:00.1");
+		expect(sm.tracks[0].duration_ms == 100, "parser stores 0:00:00.1 as 100ms");
+		p = gc_player_open(nsf, nsf_n, "fixture.nsf", crumb_m3u, strlen(crumb_m3u), &cfg);
+		expect(p != NULL, "open NSF with crumb M3U");
 		if (p) {
 			int ms = gc_player_length_ms(p);
-			expect(ms >= 55000, "short M3U 0:02 does not advertise <55s TIME");
 			expect(ms >= 600000 || ms == gc_config_untagged_fallback_ms(&cfg),
-			       "short M3U falls back to ~10-min placeholder");
+			       "absurd <250ms M3U falls back to ~10-min placeholder");
 			gc_player_info(p, &inf);
 			expect(strcmp(inf.tracks[0].title, "Title") == 0 ||
 			       inf.tracks[0].title[0] != 0,
-			       "short M3U title still merges");
+			       "crumb M3U title still merges");
+			gc_player_close(p);
+		}
+	}
+	{
+		const char *sfx_m3u =
+			"fixture.nsf::NSF,1,Fanfare,0:00:02.5,,0:00:00\n"
+			"fixture.nsf::NSF,3,Flute,0:00:03,,0:00:00\n";
+		p = gc_player_open(nsf, nsf_n, "fixture.nsf", sfx_m3u, strlen(sfx_m3u), &cfg);
+		expect(p != NULL, "open NSF with short SFX M3U");
+		if (p) {
+			gc_player_info(p, &inf);
+			expect(inf.tracks[0].duration_ms == 2500,
+			       "M3U SFX 0:00:02.5 applies as 2500 not 600000");
+			expect(gc_player_length_ms(p) == 2500, "Open length is M3U 2.5s SFX");
+			expect(gc_player_set_track(p, 2) == 0, "select flute track");
+			expect(gc_player_length_ms(p) == 3000, "M3U Flute 0:00:03 = 3000");
 			gc_player_close(p);
 		}
 	}
@@ -541,6 +555,31 @@ int main(void)
 						gc_player_info(p, &inf);
 						expect(strstr(inf.tracks[0].title, "Title") != NULL,
 						       "Zelda II Title BGM title from M3U");
+						expect(inf.tracks[10].duration_ms == 2500,
+						       "Zelda II Treasure M3U 0:00:02.5 = 2500");
+						expect(inf.tracks[32].duration_ms == 3000,
+						       "Zelda II Flute M3U 0:00:03 = 3000");
+						expect(gc_player_set_track(p, 10) == 0, "select Treasure");
+						expect(gc_player_length_ms(p) == 2500,
+						       "Treasure set_track length 2500 not 600000");
+						expect(gc_player_set_track(p, 32) == 0, "select Flute");
+						expect(gc_player_length_ms(p) == 3000,
+						       "Flute set_track length 3000 not 600000");
+						gc_player_close(p);
+					}
+					/* Renamed NSF basename vs playlist path — sidecar fallback. */
+					p = gc_player_open(zdata, (size_t)zsz,
+					                  "/workspace/uploads/zelda2-user.nsf",
+					                  ztext, (size_t)msz, &cfg);
+					expect(p != NULL, "open Zelda II NSF path + M3U (name mismatch ok)");
+					if (p) {
+						expect(gc_player_length_ms(p) == 129000 ||
+						       (gc_player_length_ms(p) >= 128000 &&
+						        gc_player_length_ms(p) <= 132000),
+						       "renamed NSF still gets Title 129s from M3U");
+						gc_player_info(p, &inf);
+						expect(inf.tracks[10].duration_ms == 2500,
+						       "renamed NSF Treasure still 2500 from M3U");
 						gc_player_close(p);
 					}
 				}
@@ -833,35 +872,50 @@ int main(void)
 							printf("SUCCESS: cache empty yet; live play still %d\n",
 							       final_ms);
 						}
-						/* Probe a few late tracks for a short SFX silence-end (cache only). */
+						/* Probe late tracks: short SFX silence-end should live-shrink
+						   (<15s) on first play; also lands in cache. */
 						{
 							int tries = 0;
 							for (ti = zinf.track_count - 1;
-							     ti >= 1 && sfx_track < 0 && rc == 0 && tries < 6;
+							     ti >= 1 && sfx_track < 0 && rc == 0 && tries < 8;
 							     --ti, ++tries) {
-								int g2 = 0;
+								int g2 = 0, live = 0, upd = 0;
 								if (gc_player_set_track(zp, ti) != 0) continue;
-								while (g2 < zcfg.rate * 8) {
+								/* Fresh unlisted SFX starts at placeholder. */
+								if (gc_player_length_ms(zp) < 500000) continue;
+								while (g2 < zcfg.rate * 12) {
 									n = gc_player_process(zp, buf, 4096);
 									if (n <= 0) break;
 									g2 += n;
+									if (gc_player_length_updated(zp, &upd) &&
+									    upd >= 250 && upd < 15000)
+										live = upd;
+									if (gc_player_length_ms(zp) >= 250 &&
+									    gc_player_length_ms(zp) < 15000) {
+										live = gc_player_length_ms(zp);
+										break;
+									}
 								}
 								memset(&zrec, 0, sizeof zrec);
-								if (gc_len_cache_get(zcache, zpath,
+								if (live >= 250 && live < 15000) {
+									sfx_track = ti;
+									sfx_ms = live;
+									printf("SUCCESS: short SFX track %d live length=%d (<15s)\n",
+									       sfx_track + 1, sfx_ms);
+								} else if (gc_len_cache_get(zcache, zpath,
 								                     gc_file_size(zpath),
 								                     gc_file_mtime(zpath), &zrec) &&
 								    ti < zrec.track_count &&
-								    zrec.duration_ms[ti] >= 2500 &&
+								    zrec.duration_ms[ti] >= 250 &&
 								    zrec.duration_ms[ti] < 15000) {
 									sfx_track = ti;
 									sfx_ms = zrec.duration_ms[ti];
+									printf("SUCCESS: short SFX track %d cache length=%d (<15s)\n",
+									       sfx_track + 1, sfx_ms);
 								}
 							}
 						}
-						if (sfx_track >= 0) {
-							printf("SUCCESS: short SFX track %d cache length=%d (<15s)\n",
-							       sfx_track + 1, sfx_ms);
-						} else {
+						if (sfx_track < 0) {
 							printf("    (no short SFX commit in probe window — non-fatal)\n");
 						}
 						free(buf);

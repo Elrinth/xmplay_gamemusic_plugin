@@ -440,8 +440,9 @@ static void set_length_now(int play_ms)
 	float sec;
 	if (!xmpfin || !xmpfin->SetLength || play_ms <= 0)
 		return;
-	/* Never advertise absurd shorts to XMPlay (failed M3U parse → ~2s). */
-	if (play_ms < GC_MEAS_MIN_SANE_MS)
+	/* Never advertise absurd crumbs to XMPlay (<250ms). Short SFX M3U
+	   (2.5s / 3s / 6s) must pass through. */
+	if (play_ms < GC_M3U_MIN_MS)
 		play_ms = GC_DEFAULT_PLAY_MS;
 	sec = (float)play_ms / 1000.0f;
 	if (sec > 0.0f && sec < 86400.0f)
@@ -1746,7 +1747,7 @@ static DWORD WINAPI gc_GetFileInfo(const char *filename, XMPFILE file,
 					   short sync false-measure. */
 					for (i = 0; i < n; ++i) {
 						int ms = rec.duration_ms[i];
-						if (ms < GC_MEAS_MIN_SANE_MS)
+						if (ms < GC_M3U_MIN_MS)
 							ms = GC_DEFAULT_PLAY_MS;
 						lens[i] = (float)ms / 1000.0f;
 					}
@@ -1788,8 +1789,9 @@ static DWORD WINAPI gc_GetFileInfo(const char *filename, XMPFILE file,
 		if (lens) {
 			for (i = 0; i < n; ++i) {
 				int ms = inf.tracks[i].duration_ms;
-				/* Never advertise 0 / absurd shorts — 10-min placeholder. */
-				if (ms < GC_MEAS_MIN_SANE_MS)
+				/* Never advertise 0 / absurd crumbs — 10-min placeholder.
+				   Tagged SFX (250ms–15s) and music lengths pass through. */
+				if (ms < GC_M3U_MIN_MS)
 					ms = GC_DEFAULT_PLAY_MS;
 				lens[i] = (float)ms / 1000.0f;
 			}
@@ -2016,11 +2018,11 @@ static DWORD WINAPI gc_Process(float *buf, DWORD count)
 	if (frames <= 0)
 		return 0;
 	got = gc_player_process(g_play, buf, frames);
-	/* 1.0.7: deferred measure does not set length_dirty mid-play. Keep the
-	   hook for live_ok path safety, but never shrink below the current TIME. */
+	/* 1.0.9: allow live SetLength shrink for short SFX silence-end (<15s).
+	   Long-music deferred measure stays cache-only (no dirty / no shrink). */
 	if (gc_player_length_updated(g_play, &ms)) {
 		int cur = gc_player_length_ms(g_play);
-		if (ms > 0 && (cur <= 0 || ms >= cur))
+		if (ms > 0 && (cur <= 0 || ms >= cur || ms < GC_MEAS_SFX_MAX_MS))
 			set_length_now(ms);
 	}
 	if (got <= 0)

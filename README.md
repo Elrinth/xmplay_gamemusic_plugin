@@ -1,4 +1,4 @@
-# xmp-gamemusic 1.0.8
+# xmp-gamemusic 1.0.9
 
 Native **32-bit** XMPlay input plugin for chip / console music.
 Display name **Game Music**. DLL `xmp-gamemusic.dll`.
@@ -10,7 +10,7 @@ of `in_nez.dll` or `in_notsofatso.dll`.
 Intended home: `Elrinth/xmplay_gamemusic_plugin`.
 
 Classic XMPlay is **32-bit only**. This DLL is PE32 i386.
-VERSIONINFO FILEVERSION is **1.0.8.0**; `PLUGIN_XMPVER` is **1000800**.
+VERSIONINFO FILEVERSION is **1.0.9.0**; `PLUGIN_XMPVER` is **1000900**.
 
 ## Install
 
@@ -67,6 +67,15 @@ an engine. Forcing GME on FM KSS will sound wrong — that is GME, not us.
 
 Forced stereo widen / reverb from old `xmp-gme` are **not** defaults.
 Stereo width default is **0**.
+
+## 1.0.9
+
+- **Trust short M3U SFX times:** durations in **[250 ms, 15 s]** from NEZ/nsfe2m3u apply as tagged play TIME on Open / GetFileInfo / set_track (e.g. Zelda II Treasure `0:00:02.5` → ~2500, Flute `0:00:03` → ~3000). Music M3U times (≥15 s, including Title `0:02:09` → 129 s) still apply.
+- Only reject absurd M3U crumbs **&lt;250 ms** (or parse failure) — not all shorts / not a 2.5 s or 55 s floor for tagged M3U.
+- **Live silence-end for unlisted SFX:** deferred side-player silence-end **&lt;15 s** may `SetLength` / shrink the 10-minute placeholder on first play (`live_ok`). Long one-loop measure (≥55 s) remains **cache-only** until the next Open / set_track (no mid-play shrink of Title ~68 s).
+- Sidecar M3U: if playlist paths do not match a renamed NSF basename, fall back to applying all entries (single-file playlist).
+- Keep H:MM:SS parser from 1.0.8.
+- Version **1.0.9**.
 
 ## 1.0.8
 
@@ -221,7 +230,7 @@ TIME.
 make          # host tests + dist/xmp-gamemusic.dll
 make dll
 make test
-make pack     # xmp-gamemusic-1.0.8.zip = dll + README.md
+make pack     # xmp-gamemusic-1.0.9.zip = dll + README.md
 ```
 
 Emulation cores are built at `-O2`.

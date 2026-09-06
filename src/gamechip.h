@@ -9,8 +9,8 @@ extern "C" {
 #endif
 
 #define PLUGIN_NAME    "Game Music"
-#define PLUGIN_VERSION "1.0.8"
-#define PLUGIN_XMPVER  1000800 /* 1*1000000+0*10000+8*100; FILEVERSION 1.0.8.0 */
+#define PLUGIN_VERSION "1.0.9"
+#define PLUGIN_XMPVER  1000900 /* 1*1000000+0*10000+9*100; FILEVERSION 1.0.9.0 */
 
 #define GC_MAX_PATH        1024
 #define GC_MAX_TITLE       256
@@ -25,10 +25,13 @@ extern "C" {
 /* Confident measured lengths only (discard fragile phrase-repeat "loops"). */
 #define GC_MEAS_MIN_LOOP_MS   55000 /* one-loop / intro+loop end must be >= ~55s */
 #define GC_MEAS_SFX_MAX_MS    15000 /* silence-end one-shots / SFX only below this */
-#define GC_MEAS_MIN_SANE_MS    2500 /* anything shorter is noise — keep default TIME */
+#define GC_MEAS_SFX_MIN_MS     250 /* measured SFX silence-end floor */
+#define GC_M3U_MIN_MS          250 /* reject only absurd M3U / parse junk */
+#define GC_MEAS_MIN_SANE_MS   GC_MEAS_SFX_MIN_MS /* alias: measured + advertise floor */
 #define GC_MEAS_SILENCE_MS      800 /* trailing hush before silence-end commit */
-/* 1.0.7+: mid-play measure never shrinks live TIME — cache only until next open. */
-/* 1.0.8: NEZ M3U H:MM:SS (0:02:09 = 129s, not ~2s); refuse absurd short TIME. */
+/* 1.0.7+: mid-play long-music measure is cache-only until next open/set_track. */
+/* 1.0.8: NEZ M3U H:MM:SS (0:02:09 = 129s, not ~2s). */
+/* 1.0.9: trust M3U [250ms,15s] SFX + live silence-end SetLength for unlisted SFX. */
 /* Library placeholders — never expose these as TIME. */
 #define GC_DUMMY_GME_MS    150000 /* GME unknown play_length: 2:30 */
 #define GC_DUMMY_3MIN_MS   180000

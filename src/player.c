@@ -178,11 +178,11 @@ static int default_chip_play_ms(const gc_config *cfg, const gc_track_info *tr)
 
 /* Accept only confident measured lengths:
    - long one-loop / song (>= 55s), or
-   - short SFX silence-end (< 15s, >= 2.5s).
+   - short SFX silence-end (< 15s, >= 250ms).
    15–55s phrase repeats are discarded (keep 10-min default). */
 static int length_is_confident(int ms)
 {
-	if (ms < GC_MEAS_MIN_SANE_MS)
+	if (ms < GC_MEAS_SFX_MIN_MS)
 		return 0;
 	if (ms < GC_MEAS_SFX_MAX_MS)
 		return 1;
@@ -232,8 +232,8 @@ static void apply_chip_defaults(gc_player *p, const gc_config *cfg, const gc_len
 		p->track_pending_measure[i] = 0;
 		if (gc_is_dummy_length_ms(ms))
 			ms = 0;
-		/* Absurd shorts (<2.5s) are never trusted as chip TIME (bad M3U). */
-		if (ms > 0 && ms < GC_MEAS_MIN_SANE_MS)
+		/* Absurd shorts (<250ms) are never trusted as chip TIME (parse junk). */
+		if (ms > 0 && ms < GC_M3U_MIN_MS)
 			ms = 0;
 		if (ms > 0) {
 			p->track_tagged[i] = 1;
@@ -294,10 +294,11 @@ static void cache_store_lengths(gc_player *p)
 	gc_len_cache_put(p->cache_path, p->cache_key, p->cache_size, p->cache_mtime, &rec);
 }
 
-/* Commit a confident measure to info + length cache only.
-   live_ok: apply to length_ms/cap_frames (Open/set_track time).
-   Mid-play deferred results MUST pass live_ok=0 — never SetLength / shrink
-   the current placeholder cap; next Open/GetFileInfo/set_track applies. */
+/* Commit a confident measure to info + length cache.
+   live_ok: apply to length_ms/cap_frames and notify XMPlay (SetLength).
+   Long-music deferred results pass live_ok=0 (cache only; next set_track).
+   Short SFX silence-end (<15s) may pass live_ok=1 to shrink the 10-min
+   placeholder on first play without requiring Shift+Left revisit. */
 static void apply_measured_length(gc_player *p, int track0, int ms, int live_ok)
 {
 	if (!p || track0 < 0 || track0 >= GC_MAX_TRACKS || ms <= 0)
@@ -320,8 +321,9 @@ static void apply_measured_length(gc_player *p, int track0, int ms, int live_ok)
 		p->length_ms = ms;
 		p->cap_frames = (int)((int64_t)ms * p->rate / 1000);
 		snprintf(p->info.length_src, sizeof p->info.length_src, "measured");
-		/* set_track/Open call set_length_now; do not mark dirty for mid-play. */
-		p->length_dirty = 0;
+		/* Mid-play SFX: mark dirty so Process calls SetLength. set_track/Open
+		   also call set_length_now; a second SetLength is harmless. */
+		p->length_dirty = 1;
 		p->length_dirty_ms = ms;
 	}
 }
@@ -370,11 +372,12 @@ static void defer_measure_poll(gc_player *p)
 	if (r == 0)
 		return;
 	p->defer_active = 0;
-	if (r > 0)
-		apply_measured_length(p, p->track, r, 0);
-	else {
-		/* Detector gave up — try a quick PCM scan on the side? Keep 10-min.
-		   Mark pending clear so we do not spin forever. */
+	if (r > 0) {
+		/* Live shrink only for short SFX silence-end; long loops stay cache-only. */
+		int live = (r < GC_MEAS_SFX_MAX_MS) ? 1 : 0;
+		apply_measured_length(p, p->track, r, live);
+	} else {
+		/* Detector gave up — keep 10-min. Clear pending so we do not spin. */
 		p->track_pending_measure[p->track] = 0;
 	}
 }
@@ -387,11 +390,12 @@ static void reset_silence_state(gc_player *p)
 	p->silent_frames = 0;
 }
 
-/* M3U play TIME for NSF family: reject absurd shorts (<2.5s) that come from
-   a failed H:MM:SS parse (e.g. old 0:02:09 → 2009ms). Titles always merge. */
+/* M3U play TIME: trust tagged lengths from 250ms up (SFX fanfares ~2–6s,
+   music ≥15s). Only reject absurd <250ms junk / failed parse crumbs.
+   Titles always merge regardless. */
 static int m3u_duration_ok(gc_format fmt, int ms)
 {
-	if (ms < GC_MEAS_MIN_SANE_MS)
+	if (ms < GC_M3U_MIN_MS)
 		return 0;
 	(void)fmt;
 	return 1;
@@ -545,8 +549,13 @@ gc_player *gc_player_open(const unsigned char *data, size_t len,
 		}
 	}
 
-	if (m3u_text && m3u_len && !have_m3u)
+	if (m3u_text && m3u_len && !have_m3u) {
 		have_m3u = gc_m3u_parse(m3u_text, m3u_len, filename, &m3u_info);
+		/* Sidecar next to a renamed NSF: playlist paths may use the original
+		   rip name. If nothing matched, apply all entries (single-file M3U). */
+		if (!have_m3u)
+			have_m3u = gc_m3u_parse(m3u_text, m3u_len, NULL, &m3u_info);
+	}
 
 	if (!gc_format_claimed(fmt) || fmt == GC_FMT_ZIP || fmt == GC_FMT_SEVENZ) {
 		free(unpacked);
