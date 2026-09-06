@@ -1739,10 +1739,12 @@ static DWORD WINAPI gc_GetFileInfo(const char *filename, XMPFILE file,
 			if (length) {
 				float *lens = (float *)xmp_alloc((DWORD)(sizeof(float) * (size_t)n));
 				if (lens) {
+					/* Confident cache hit, else 10-min placeholder — never a
+					   short sync false-measure. */
 					for (i = 0; i < n; ++i)
 						lens[i] = rec.duration_ms[i] > 0
 						              ? (float)rec.duration_ms[i] / 1000.0f
-						              : 0.0f;
+						              : (float)GC_DEFAULT_PLAY_MS / 1000.0f;
 				}
 				*length = lens;
 			}
@@ -2007,8 +2009,13 @@ static DWORD WINAPI gc_Process(float *buf, DWORD count)
 	if (frames <= 0)
 		return 0;
 	got = gc_player_process(g_play, buf, frames);
-	if (gc_player_length_updated(g_play, &ms))
-		set_length_now(ms);
+	/* 1.0.7: deferred measure does not set length_dirty mid-play. Keep the
+	   hook for live_ok path safety, but never shrink below the current TIME. */
+	if (gc_player_length_updated(g_play, &ms)) {
+		int cur = gc_player_length_ms(g_play);
+		if (ms > 0 && (cur <= 0 || ms >= cur))
+			set_length_now(ms);
+	}
 	if (got <= 0)
 		return 0;
 	return (DWORD)got * 2u;

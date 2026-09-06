@@ -326,21 +326,21 @@ static int nsf_render(gc_eng_state *st, float *stereo, int frames)
 	int i;
 	if (!s || !s->player || !stereo || frames <= 0)
 		return 0;
-	/* Ignore NSFPlay IsStopped until our advertised cap — detection leftovers
-	   or FADE_TIME vs a short PLAY_TIME must not kill a 10-minute untagged play.
-	   Caller (player.c) ends the stream via cap_frames. */
+	/* Never EOF on NSFPlay IsStopped — player.c ends via cap_frames only.
+	   Re-arm after early FADE/Detect leftovers; if still stopped, emit silence
+	   so a 10-min untagged placeholder survives (Zelda II track 1). */
 	tmp = (int16_t *)malloc((size_t)frames * 2u * sizeof(int16_t));
 	if (!tmp)
 		return 0;
 	if (s->player->IsStopped()) {
-		/* Re-arm if NSFPlay faded early while we still want audio. */
 		nsf_playback_clear(s);
 		s->player->SetSong(s->track);
 		s->player->Reset();
-		if (s->player->IsStopped()) {
-			free(tmp);
-			return 0;
-		}
+	}
+	if (s->player->IsStopped()) {
+		memset(stereo, 0, (size_t)frames * 2u * sizeof(float));
+		free(tmp);
+		return frames;
 	}
 	s->player->Render(tmp, (xgm::UINT32)frames);
 	for (i = 0; i < frames * 2; ++i)

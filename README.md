@@ -1,4 +1,4 @@
-# xmp-gamemusic 1.0.6
+# xmp-gamemusic 1.0.7
 
 Native **32-bit** XMPlay input plugin for chip / console music.
 Display name **Game Music**. DLL `xmp-gamemusic.dll`.
@@ -10,7 +10,7 @@ of `in_nez.dll` or `in_notsofatso.dll`.
 Intended home: `Elrinth/xmplay_gamemusic_plugin`.
 
 Classic XMPlay is **32-bit only**. This DLL is PE32 i386.
-VERSIONINFO FILEVERSION is **1.0.6.0**; `PLUGIN_XMPVER` is **1000600**.
+VERSIONINFO FILEVERSION is **1.0.7.0**; `PLUGIN_XMPVER` is **1000700**.
 
 ## Install
 
@@ -68,6 +68,14 @@ an engine. Forcing GME on FM KSS will sound wrong — that is GME, not us.
 Forced stereo widen / reverb from old `xmp-gme` are **not** defaults.
 Stereo width default is **0**.
 
+## 1.0.7
+
+- **Playback survival first:** while an untagged NSF/GBS/KSS/… track plays on the 10-minute placeholder, deferred measure **never** calls `SetLength`, never shrinks `length_ms`/`cap_frames`, and never silence-cuts the live stream. Measure writes the **length cache only**; the next Open / GetFileInfo / set_track applies it.
+- NSF family: live silence EOF is **always off**. NSFPlay `IsStopped()` is re-armed or silenced — Process ends only at `cap_frames`.
+- GetFileInfo: cached confident length if present, else **600000** (never a short sync false-measure).
+- Host check: Zelda II track 1 → open **600000**, process ≥**90 s** without EOF; cache may hold ~**68000** while the current play stays at 600000.
+- Version **1.0.7**.
+
 ## 1.0.6
 
 - **Confident lengths only:** commit a measured TIME only for one-loop/end **≥ ~55 s**, or short SFX silence-ends (**&lt; 15 s** after ≥800 ms hush). Phrase repeats in the 15–55 s band are discarded (keep the 10-minute default).
@@ -110,8 +118,9 @@ NSF / GBS / KSS / AY / HES are multi-song (`GetSubSongs`,
   **Measure untagged song lengths** is on (default), a one-loop /
   song-end scan runs **during playback** (NSFPlay APU detector, then
   PCM). Only **confident** results commit (loop ≥55s, or SFX silence-end <15s).
-  When it finishes, TIME updates via `SetLength` and is written
-  to the length cache for the next open. Length is intro + **one loop**
+  When it finishes, the length is written to the length cache only
+  (applied on the next Open / GetFileInfo / set_track — never a mid-play
+  `SetLength` / cap shrink). Length is intro + **one loop**
   + fade, or last audible + tail for one-shots.
 - The scan is capped at **Max untagged / scan cap** (default **180**
   seconds). If the cap is hit with no loop and no song-end, TIME is
@@ -119,8 +128,8 @@ NSF / GBS / KSS / AY / HES are multi-song (`GetSubSongs`,
   off. This is a fallback, not the intended length for looping
   music.
 - **Never** use the silence-detect window (default 1200 ms) as TIME.
-  Silence detect only auto-stops **after** music, at the **end**, if
-  enabled and the track has no tag.
+  Live silence EOF is **always off** for NSF/NSFE/NEZ. For other chip
+  formats it stays off while on the 10-minute placeholder.
 - **Never** ship library dummy TIME (GME 2:30 / 150000, NEZ 5:00 /
   300000, or a dummy 3:00 placeholder). Process EOF is the advertised
   current-track length. `GetSubSongs` total is the sum of measured
@@ -203,7 +212,7 @@ TIME.
 make          # host tests + dist/xmp-gamemusic.dll
 make dll
 make test
-make pack     # xmp-gamemusic-1.0.6.zip = dll + README.md
+make pack     # xmp-gamemusic-1.0.7.zip = dll + README.md
 ```
 
 Emulation cores are built at `-O2`.

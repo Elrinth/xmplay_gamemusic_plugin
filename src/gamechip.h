@@ -9,8 +9,8 @@ extern "C" {
 #endif
 
 #define PLUGIN_NAME    "Game Music"
-#define PLUGIN_VERSION "1.0.6"
-#define PLUGIN_XMPVER  1000600 /* 1*1000000+0*10000+6*100; FILEVERSION 1.0.6.0 */
+#define PLUGIN_VERSION "1.0.7"
+#define PLUGIN_XMPVER  1000700 /* 1*1000000+0*10000+7*100; FILEVERSION 1.0.7.0 */
 
 #define GC_MAX_PATH        1024
 #define GC_MAX_TITLE       256
@@ -27,7 +27,7 @@ extern "C" {
 #define GC_MEAS_SFX_MAX_MS    15000 /* silence-end one-shots / SFX only below this */
 #define GC_MEAS_MIN_SANE_MS    2500 /* anything shorter is noise — keep default TIME */
 #define GC_MEAS_SILENCE_MS      800 /* trailing hush before silence-end commit */
-#define GC_LEN_APPLY_GUARD_MS   500 /* never shrink TIME to end within this of now */
+/* 1.0.7: mid-play measure never shrinks live TIME — cache only until next open. */
 /* Library placeholders — never expose these as TIME. */
 #define GC_DUMMY_GME_MS    150000 /* GME unknown play_length: 2:30 */
 #define GC_DUMMY_3MIN_MS   180000

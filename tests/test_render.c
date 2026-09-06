@@ -653,8 +653,10 @@ int main(void)
 		}
 		free(loop_nsf);
 	}
-	/* User Zelda II NSF (51 songs): Open must stay fast (10-min placeholder),
-	   Process >=60s without EOF; deferred measure commits ~68s or keeps 600000. */
+	/* User Zelda II NSF (51 songs) — 1.0.7 structural survival:
+	   open track0 → 600000; process ≥90s without EOF; deferred measure may
+	   write ~68000 to cache, but CURRENT play length stays 600000 (no mid-play
+	   SetLength/cap shrink). */
 	{
 		const char *zpath = "/workspace/uploads/zelda2-user.nsf";
 		if (access(zpath, R_OK) != 0)
@@ -670,9 +672,11 @@ int main(void)
 				gc_config zcfg;
 				gc_player *zp;
 				gc_info zinf;
+				gc_len_rec zrec;
 				float *buf;
+				const char *zcache = "/tmp/gm-zelda2-len-1.0.7.ini";
 				int n, got = 0, rc = 0, ms = 0, updated = 0, final_ms;
-				int sfx_track = -1, sfx_ms = 0, ti;
+				int sfx_track = -1, sfx_ms = 0, ti, cached0 = 0;
 				if (!zf) _exit(2);
 				fseek(zf, 0, SEEK_END);
 				zsz = ftell(zf);
@@ -681,12 +685,14 @@ int main(void)
 				if (!zdata || fread(zdata, 1, (size_t)zsz, zf) != (size_t)zsz)
 					_exit(3);
 				fclose(zf);
+				remove(zcache);
 				gc_config_defaults(&zcfg);
 				zcfg.rate = 48000;
 				zcfg.measure_untagged = 1;
 				zcfg.fade_ms = 3000;
 				zcfg.loop_count = 1;
-				zcfg.len_cache_path[0] = '\0';
+				zcfg.fatso_silence_ms = 1200;
+				snprintf(zcfg.len_cache_path, sizeof zcfg.len_cache_path, "%s", zcache);
 				zp = gc_player_open(zdata, (size_t)zsz, zpath, NULL, 0, &zcfg);
 				free(zdata);
 				if (!zp) _exit(4);
@@ -697,61 +703,79 @@ int main(void)
 				       zinf.track_count, zinf.tracks[0].duration_ms,
 				       zinf.length_src, gc_player_engine_name(zp));
 				if (!(zinf.track_count == 51 || zinf.track_count == 16)) rc = 5;
-				else if (zinf.tracks[0].duration_ms < 500000) rc = 6;
+				else if (zinf.tracks[0].duration_ms != 600000 &&
+				         zinf.tracks[0].duration_ms < 500000) rc = 6;
+				else if (gc_player_length_ms(zp) < 500000) rc = 6;
 				else if (strcmp(gc_player_engine_name(zp), "NSFPlay") != 0) rc = 8;
 				else {
 					buf = (float *)calloc((size_t)4096 * 2, sizeof(float));
 					if (!buf) rc = 9;
 					else {
-						while (got < zcfg.rate * 60) {
+						/* ≥90s wall audio without EOF; mid-play length stays placeholder. */
+						while (got < zcfg.rate * 90) {
 							n = gc_player_process(zp, buf, 4096);
 							if (n <= 0) { rc = 10; break; }
 							got += n;
 							if (gc_player_length_updated(zp, &ms)) {
 								updated = 1;
-								printf("    zelda deferred length -> %d\n", ms);
+								printf("    zelda unexpected length_updated -> %d\n", ms);
+							}
+							if (gc_player_length_ms(zp) < 500000) {
+								rc = 14; /* mid-play shrink — forbidden in 1.0.7 */
+								break;
 							}
 						}
 						final_ms = gc_player_length_ms(zp);
-						printf("SUCCESS: process >=60s without EOF (wall_ms=%d length=%d)\n",
+						printf("SUCCESS: process >=90s without EOF (wall_ms=%d length=%d)\n",
 						       (int)((int64_t)got * 1000 / zcfg.rate), final_ms);
-						/* Title ~68s (±10s) OR still 10-min — never ~2s / instant. */
-						if (updated) {
-							if (ms < 58000 || ms > 78000) rc = 11;
+						if (final_ms < 500000) rc = 12;
+						if (updated) rc = 15; /* deferred must not SetLength mid-play */
+						if (rc == 0 && got < zcfg.rate * 90) rc = 10;
+						/* Cache may hold ~68s after measure; current play still 600000. */
+						memset(&zrec, 0, sizeof zrec);
+						if (gc_len_cache_get(zcache, zpath,
+						                     gc_file_size(zpath),
+						                     gc_file_mtime(zpath), &zrec) &&
+						    zrec.track_count > 0)
+							cached0 = zrec.duration_ms[0];
+						printf("    zelda cache track0=%d (want ~68000 or 0 if still measuring)\n",
+						       cached0);
+						if (cached0 > 0) {
+							if (cached0 < 58000 || cached0 > 78000) rc = 11;
 							else
-								printf("SUCCESS: title theme commits ~%d (want ~68000)\n", ms);
-						} else if (final_ms < 500000) {
-							rc = 12;
+								printf("SUCCESS: cache has ~%d; live play still %d\n",
+								       cached0, final_ms);
 						} else {
-							printf("SUCCESS: title stays %d (not confident — OK)\n",
+							printf("SUCCESS: cache empty yet; live play still %d\n",
 							       final_ms);
 						}
-						if (final_ms < 2500 || (final_ms >= 15000 && final_ms < 55000))
-							rc = 13;
-						if (rc == 0 && got < zcfg.rate * 60) rc = 10;
-						/* Probe a few late tracks for a short SFX silence-end. */
+						/* Probe a few late tracks for a short SFX silence-end (cache only). */
 						{
 							int tries = 0;
 							for (ti = zinf.track_count - 1;
 							     ti >= 1 && sfx_track < 0 && rc == 0 && tries < 6;
 							     --ti, ++tries) {
-								int g2 = 0, ums = 0, done = 0;
+								int g2 = 0;
 								if (gc_player_set_track(zp, ti) != 0) continue;
-								while (g2 < zcfg.rate * 8 && !done) {
+								while (g2 < zcfg.rate * 8) {
 									n = gc_player_process(zp, buf, 4096);
 									if (n <= 0) break;
 									g2 += n;
-									if (gc_player_length_updated(zp, &ums) &&
-									    ums >= 2500 && ums < 15000) {
-										sfx_track = ti;
-										sfx_ms = ums;
-										done = 1;
-									}
+								}
+								memset(&zrec, 0, sizeof zrec);
+								if (gc_len_cache_get(zcache, zpath,
+								                     gc_file_size(zpath),
+								                     gc_file_mtime(zpath), &zrec) &&
+								    ti < zrec.track_count &&
+								    zrec.duration_ms[ti] >= 2500 &&
+								    zrec.duration_ms[ti] < 15000) {
+									sfx_track = ti;
+									sfx_ms = zrec.duration_ms[ti];
 								}
 							}
 						}
 						if (sfx_track >= 0) {
-							printf("SUCCESS: short SFX track %d length=%d (<15s)\n",
+							printf("SUCCESS: short SFX track %d cache length=%d (<15s)\n",
 							       sfx_track + 1, sfx_ms);
 						} else {
 							printf("    (no short SFX commit in probe window — non-fatal)\n");
@@ -759,14 +783,15 @@ int main(void)
 						free(buf);
 					}
 				}
-				printf("    zelda final rc=%d length=%d updated=%d\n",
-				       rc, gc_player_length_ms(zp), updated);
+				printf("    zelda final rc=%d length=%d updated=%d cache0=%d\n",
+				       rc, gc_player_length_ms(zp), updated, cached0);
+				gc_player_close(zp);
 				_exit(rc);
 			} else if (pid > 0) {
 				int st = 0;
 				waitpid(pid, &st, 0);
 				expect(WIFEXITED(st) && WEXITSTATUS(st) == 0,
-				       "zelda2: TIME 600000, process>=60s, title~68s or 600000");
+				       "zelda2: TIME 600000, process>=90s, cache~68s live stays 600000");
 				if (!WIFEXITED(st) || WEXITSTATUS(st) != 0)
 					fprintf(stderr, "zelda2 child status=%d exit=%d\n", st,
 					        WIFEXITED(st) ? WEXITSTATUS(st) : -1);

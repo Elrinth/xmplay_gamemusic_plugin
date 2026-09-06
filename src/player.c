@@ -291,9 +291,12 @@ static void cache_store_lengths(gc_player *p)
 	gc_len_cache_put(p->cache_path, p->cache_key, p->cache_size, p->cache_mtime, &rec);
 }
 
-static void apply_measured_length(gc_player *p, int track0, int ms)
+/* Commit a confident measure to info + length cache only.
+   live_ok: apply to length_ms/cap_frames (Open/set_track time).
+   Mid-play deferred results MUST pass live_ok=0 — never SetLength / shrink
+   the current placeholder cap; next Open/GetFileInfo/set_track applies. */
+static void apply_measured_length(gc_player *p, int track0, int ms, int live_ok)
 {
-	int played_ms, remain;
 	if (!p || track0 < 0 || track0 >= GC_MAX_TRACKS || ms <= 0)
 		return;
 	if (ms > GC_CAP_MS)
@@ -305,24 +308,19 @@ static void apply_measured_length(gc_player *p, int track0, int ms)
 		p->track_pending_measure[track0] = 0;
 		return;
 	}
-	played_ms = (int)((int64_t)p->frames_played * 1000 / (p->rate > 0 ? p->rate : 1));
-	remain = ms - played_ms;
-	/* Never SetLength/cap to something that ends within ~500ms of now
-	   (bad measure racing in at t≈0 or late short detect → instant skip). */
-	if (track0 == p->track && remain < GC_LEN_APPLY_GUARD_MS) {
-		p->track_pending_measure[track0] = 0;
-		return;
-	}
 	p->info.tracks[track0].duration_ms = ms;
 	p->track_pending_measure[track0] = 0;
+	cache_store_lengths(p);
+	if (!live_ok)
+		return; /* cache only — current play keeps placeholder TIME/cap */
 	if (track0 == p->track) {
 		p->length_ms = ms;
 		p->cap_frames = (int)((int64_t)ms * p->rate / 1000);
 		snprintf(p->info.length_src, sizeof p->info.length_src, "measured");
-		p->length_dirty = 1;
+		/* set_track/Open call set_length_now; do not mark dirty for mid-play. */
+		p->length_dirty = 0;
 		p->length_dirty_ms = ms;
 	}
-	cache_store_lengths(p);
 }
 
 static void defer_measure_start_track(gc_player *p, int track0)
@@ -354,7 +352,7 @@ static void defer_measure_start_track(gc_player *p, int track0)
 			p->ops->set_track(p->eng, saved);
 		p->track = saved;
 		if (ms > 0)
-			apply_measured_length(p, track0, ms);
+			apply_measured_length(p, track0, ms, 1);
 		else
 			p->track_pending_measure[track0] = 0;
 	}
@@ -370,7 +368,7 @@ static void defer_measure_poll(gc_player *p)
 		return;
 	p->defer_active = 0;
 	if (r > 0)
-		apply_measured_length(p, p->track, r);
+		apply_measured_length(p, p->track, r, 0);
 	else {
 		/* Detector gave up — try a quick PCM scan on the side? Keep 10-min.
 		   Mark pending clear so we do not spin forever. */
@@ -723,37 +721,72 @@ int gc_player_process(gc_player *p, float *stereo, int frames)
 			frames = left;
 	}
 	got = p->ops->render(p->eng, stereo, frames);
-	if (got <= 0)
-		return 0;
-	/* Never promote silence-detect / AUTO_STOP into advertised TIME.
-	   Deferred measure owns SFX silence-ends. Live silence-cut on the
-	   10-min untagged fallback caused instant EOF after a rejected early
-	   APU detect cleared pending (TIME still 600000). Skip silence-cut
-	   entirely when this player uses an untagged fallback TIME. */
-	if (p->silence_ms > 0 &&
-	    p->untagged_fallback_ms <= 0 &&
-	    !(p->protect_tagged && p->track < GC_MAX_TRACKS && p->track_tagged[p->track]) &&
-	    !(p->track < GC_MAX_TRACKS && p->track_pending_measure[p->track])) {
-		int i, keep = got;
-		float thr = 1.5e-3f;
-		for (i = 0; i < got; ++i) {
-			float aL = stereo[i * 2];
-			float aR = stereo[i * 2 + 1];
-			if (aL < 0) aL = -aL;
-			if (aR < 0) aR = -aR;
-			if (aL > thr || aR > thr) {
-				p->heard_audio = 1;
-				p->silent_frames = 0;
-			} else if (p->heard_audio) {
-				p->silent_frames++;
-				if ((int)((int64_t)p->silent_frames * 1000 / p->rate) >=
-				    p->silence_ms) {
-					keep = i + 1;
-					p->frames_played += keep;
-					gc_volume_process(&p->vol, stereo, keep);
-					/* Next Process returns 0 (real post-audio end). */
-					p->cap_frames = p->frames_played;
-					return keep;
+	/* Until cap_frames: never treat engine stop as EOF for untagged chip
+	   placeholders (NSFPlay IsStopped / early FADE). Fill silence and
+	   keep counting so the 10-min TIME survives. */
+	if (got <= 0) {
+		int placeholder = (p->untagged_fallback_ms > 0 &&
+		                   p->length_ms == p->untagged_fallback_ms) ||
+		                  (p->track < GC_MAX_TRACKS &&
+		                   p->track_pending_measure[p->track]) ||
+		                  (p->format == GC_FMT_NSF || p->format == GC_FMT_NSFE ||
+		                   p->format == GC_FMT_NEZ || p->format == GC_FMT_NSZ);
+		if (placeholder && p->cap_frames > 0 &&
+		    p->frames_played < p->cap_frames) {
+			memset(stereo, 0, (size_t)frames * 2u * sizeof(float));
+			got = frames;
+		} else {
+			return 0;
+		}
+	}
+	/* Live silence-cut: OFF for NSF family (always — deferred lengths), and
+	   OFF for any untagged chip placeholder / pending measure. Deferred
+	   measure owns SFX silence-ends in the cache only. Never EOF early. */
+	{
+		int allow_sil = 0;
+		if (p->silence_ms > 0) {
+			switch (p->format) {
+			case GC_FMT_NSF:
+			case GC_FMT_NSFE:
+			case GC_FMT_NEZ:
+			case GC_FMT_NSZ:
+				allow_sil = 0;
+				break;
+			default:
+				allow_sil = 1;
+				if (p->untagged_fallback_ms > 0 &&
+				    p->length_ms == p->untagged_fallback_ms)
+					allow_sil = 0;
+				if (p->track < GC_MAX_TRACKS &&
+				    p->track_pending_measure[p->track])
+					allow_sil = 0;
+				if (p->protect_tagged && p->track < GC_MAX_TRACKS &&
+				    p->track_tagged[p->track])
+					allow_sil = 0;
+				break;
+			}
+		}
+		if (allow_sil) {
+			int i, keep = got;
+			float thr = 1.5e-3f;
+			for (i = 0; i < got; ++i) {
+				float aL = stereo[i * 2];
+				float aR = stereo[i * 2 + 1];
+				if (aL < 0) aL = -aL;
+				if (aR < 0) aR = -aR;
+				if (aL > thr || aR > thr) {
+					p->heard_audio = 1;
+					p->silent_frames = 0;
+				} else if (p->heard_audio) {
+					p->silent_frames++;
+					if ((int)((int64_t)p->silent_frames * 1000 / p->rate) >=
+					    p->silence_ms) {
+						keep = i + 1;
+						p->frames_played += keep;
+						gc_volume_process(&p->vol, stereo, keep);
+						p->cap_frames = p->frames_played;
+						return keep;
+					}
 				}
 			}
 		}
