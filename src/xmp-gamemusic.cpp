@@ -2019,7 +2019,7 @@ static DWORD WINAPI gc_Process(float *buf, DWORD count)
 		return 0;
 	got = gc_player_process(g_play, buf, frames);
 	/* 1.0.10: any live_ok commit sets length_dirty (SFX <15s and long loops
-	   ≥55s). apply_measured_length already refused unsafe shrinks below the
+	   ≥15s). apply_measured_length already refused unsafe shrinks below the
 	   playhead — always SetLength when dirty so the XMPlay UI updates on
 	   first play without requiring Shift+Left. */
 	if (gc_player_length_updated(g_play, &ms)) {

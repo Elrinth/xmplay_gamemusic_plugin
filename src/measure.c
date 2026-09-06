@@ -47,7 +47,7 @@ static int is_hush(uint32_t sig)
 	return (sig & 0x7FFF) == 0;
 }
 
-/* Confident lengths only: long one-loop (>=55s) or short SFX silence-end (<15s). */
+/* Confident lengths only: one-loop (>=15s) or short SFX silence-end (<15s). */
 static int confident_ms(int ms, int from_loop)
 {
 	if (ms < GC_MEAS_MIN_SANE_MS)

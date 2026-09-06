@@ -385,7 +385,7 @@ static void nsf_measure_restore(nsf_state *s, int track)
 /* NSFPlay APU-write loop detector (AUTO_DETECT / IsLooped). One-shot:
    LOOP_NUM=1 so GetLength is intro + one loop when a loop is found.
    Use NSFPlay's stock DETECT_TIME/INT (30s/5s). Commit only confident
-   lengths: loop period (and end) >= 55s. Short phrase repeats are discarded. */
+   lengths: loop period (and end) >= 15s. Phrase repeats <15s are discarded. */
 static int nsf_eval_detect(xgm::NSF *nsf, int fade_ms)
 {
 	int end, loop, ms = 0;
@@ -393,7 +393,7 @@ static int nsf_eval_detect(xgm::NSF *nsf, int fade_ms)
 		return 0;
 	end = nsf->time_in_ms;
 	loop = nsf->loop_in_ms;
-	/* Loop commit: one-loop period and intro+loop end both >= 55s. */
+	/* Loop commit: one-loop period and intro+loop end both >= 15s. */
 	if (loop >= GC_MEAS_MIN_LOOP_MS && end >= GC_MEAS_MIN_LOOP_MS)
 		ms = end + (fade_ms > 0 ? fade_ms : 0);
 	/* Non-loop APU "end" is not used for SFX — silence-end is PCM-only. */

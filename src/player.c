@@ -177,9 +177,9 @@ static int default_chip_play_ms(const gc_config *cfg, const gc_track_info *tr)
 }
 
 /* Accept only confident measured lengths:
-   - long one-loop / song (>= 55s), or
+   - one-loop / song (>= 15s), or
    - short SFX silence-end (< 15s, >= 250ms).
-   15–55s phrase repeats are discarded (keep 10-min default). */
+   Fragile phrase repeats (<15s) are discarded (keep 10-min default). */
 static int length_is_confident(int ms)
 {
 	if (ms < GC_MEAS_SFX_MIN_MS)
@@ -296,9 +296,9 @@ static void cache_store_lengths(gc_player *p)
 
 /* Commit a confident measure to info + length cache.
    live_ok: apply to length_ms/cap_frames and notify XMPlay (SetLength).
-   1.0.10: deferred measure always requests live_ok for confident lengths
-   (short SFX silence-end <15s AND long one-loop ≥55s). Safety: do not
-   shrink below played_ms−slack unless SFX silence-end is near the playhead. */
+   1.0.10/1.0.11: deferred measure always requests live_ok for confident lengths
+   (short SFX silence-end <15s AND one-loop >=15s). Safety: do not
+   shrink below played_ms-slack unless SFX silence-end is near the playhead. */
 static void apply_measured_length(gc_player *p, int track0, int ms, int live_ok)
 {
 	int played_ms, slack;
@@ -386,8 +386,8 @@ static void defer_measure_poll(gc_player *p)
 		return;
 	p->defer_active = 0;
 	if (r > 0) {
-		/* 1.0.10: always attempt live update for confident SFX + long loops.
-		   apply_measured_length enforces playhead safety / ≥55s loop rule. */
+		/* 1.0.10/1.0.11: always attempt live update for confident SFX + loops.
+		   apply_measured_length enforces playhead safety / >=15s loop rule. */
 		apply_measured_length(p, p->track, r, 1);
 	} else {
 		/* Detector gave up — keep 10-min. Clear pending so we do not spin. */

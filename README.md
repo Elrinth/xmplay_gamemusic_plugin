@@ -1,4 +1,4 @@
-# xmp-gamemusic 1.0.10
+# xmp-gamemusic 1.0.11
 
 Native **32-bit** XMPlay input plugin for chip / console music.
 Display name **Game Music**. DLL `xmp-gamemusic.dll`.
@@ -10,7 +10,7 @@ of `in_nez.dll` or `in_notsofatso.dll`.
 Intended home: `Elrinth/xmplay_gamemusic_plugin`.
 
 Classic XMPlay is **32-bit only**. This DLL is PE32 i386.
-VERSIONINFO FILEVERSION is **1.0.10.0**; `PLUGIN_XMPVER` is **1001000**.
+VERSIONINFO FILEVERSION is **1.0.11.0**; `PLUGIN_XMPVER` is **1001100**.
 
 ## Install
 
@@ -67,6 +67,13 @@ an engine. Forcing GME on FM KSS will sound wrong — that is GME, not us.
 
 Forced stereo widen / reverb from old `xmp-gme` are **not** defaults.
 Stereo width default is **0**.
+
+## 1.0.11
+
+- **Lower confident loop floor 55s → 15s:** one-loop / intro+loop end commits when period and end are **≥15 s** (was ≥55 s). Short BGM such as Zelda II track 3 (~38 s one-loop) no longer stays stuck at the **10:00** placeholder forever.
+- Still reject fragile phrase repeats **&lt;15 s**. Silence-end SFX commit remains **&lt;15 s** (unchanged). Live `SetLength` path from 1.0.10 unchanged for confident results.
+- Title M3U `0:02:09` → 129 s and short SFX M3U still OK.
+- Version **1.0.11**.
 
 ## 1.0.10
 
@@ -143,7 +150,7 @@ NSF / GBS / KSS / AY / HES are multi-song (`GetSubSongs`,
   times): default TIME is **10 minutes** so Open stays instant. When
   **Measure untagged song lengths** is on (default), a one-loop /
   song-end scan runs **during playback** (NSFPlay APU detector, then
-  PCM). Only **confident** results commit (loop ≥55s, or SFX silence-end <15s).
+  PCM). Only **confident** results commit (loop ≥15s, or SFX silence-end <15s).
   When it finishes, the length is written to the length cache only
   (applied on the next Open / GetFileInfo / set_track — never a mid-play
   `SetLength` / cap shrink). Length is intro + **one loop**
@@ -238,7 +245,7 @@ TIME.
 make          # host tests + dist/xmp-gamemusic.dll
 make dll
 make test
-make pack     # xmp-gamemusic-1.0.10.zip = dll + README.md
+make pack     # xmp-gamemusic-1.0.11.zip = dll + README.md
 ```
 
 Emulation cores are built at `-O2`.

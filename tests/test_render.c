@@ -779,7 +779,7 @@ int main(void)
 	/* User Zelda II NSF — 1.0.10 live measure:
 	   open track0 → 600000; deferred confident length updates live (length_dirty
 	   / SetLength path) without set_track. SFX tracks 16/25 silence-end <15s;
-	   long Title loop ≥55s may snap from 10:00 when detect completes. */
+	   Title/track3 loops ≥15s may snap from 10:00 when detect completes. */
 	{
 		const char *zpath = "/workspace/uploads/zelda2-user.nsf";
 		if (access(zpath, R_OK) != 0)
@@ -797,7 +797,7 @@ int main(void)
 				gc_info zinf;
 				gc_len_rec zrec;
 				float *buf;
-				const char *zcache = "/tmp/gm-zelda2-len-1.0.10.ini";
+				const char *zcache = "/tmp/gm-zelda2-len-1.0.11.ini";
 				int n, got = 0, rc = 0, ms = 0, updated = 0, final_ms;
 				int sfx_ok = 0, cached0 = 0;
 				int sfx_candidates[] = { 15, 24, 25, 14, 16 }; /* 1-based 16,25,… */
@@ -853,7 +853,7 @@ int main(void)
 								printf("    zelda live length_updated -> %d (played~%d)\n",
 								       ms, played_ms);
 								if (ms < GC_MEAS_MIN_LOOP_MS) {
-									rc = 14; /* Title should be long loop ≥55s */
+									rc = 14; /* Title should be long loop ≥15s */
 									break;
 								}
 								if (ms + 750 < played_ms) {
@@ -941,7 +941,7 @@ int main(void)
 				int st = 0;
 				waitpid(pid, &st, 0);
 				expect(WIFEXITED(st) && WEXITSTATUS(st) == 0,
-				       "zelda2 1.0.10: live measure SetLength path (SFX + optional title loop)");
+				       "zelda2 1.0.11: live measure SetLength path (SFX + loops >=15s)");
 				if (!WIFEXITED(st) || WEXITSTATUS(st) != 0)
 					fprintf(stderr, "zelda2 child status=%d exit=%d\n", st,
 					        WIFEXITED(st) ? WEXITSTATUS(st) : -1);

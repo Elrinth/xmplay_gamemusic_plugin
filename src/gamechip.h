@@ -9,8 +9,8 @@ extern "C" {
 #endif
 
 #define PLUGIN_NAME    "Game Music"
-#define PLUGIN_VERSION "1.0.10"
-#define PLUGIN_XMPVER  1001000 /* 1*1000000+0*10000+10*100; FILEVERSION 1.0.10.0 */
+#define PLUGIN_VERSION "1.0.11"
+#define PLUGIN_XMPVER  1001100 /* 1*1000000+0*10000+11*100; FILEVERSION 1.0.11.0 */
 
 #define GC_MAX_PATH        1024
 #define GC_MAX_TITLE       256
@@ -23,7 +23,7 @@ extern "C" {
 #define GC_DEFAULT_PLAY_MS 600000 /* untagged default TIME = 10 minutes */
 #define GC_CAP_MS          (10 * 60 * 1000) /* hard safety cap, never a dummy TIME */
 /* Confident measured lengths only (discard fragile phrase-repeat "loops"). */
-#define GC_MEAS_MIN_LOOP_MS   55000 /* one-loop / intro+loop end must be >= ~55s */
+#define GC_MEAS_MIN_LOOP_MS   15000 /* one-loop / intro+loop end must be >= ~15s */
 #define GC_MEAS_SFX_MAX_MS    15000 /* silence-end one-shots / SFX only below this */
 #define GC_MEAS_SFX_MIN_MS     250 /* measured SFX silence-end floor */
 #define GC_M3U_MIN_MS          250 /* reject only absurd M3U / parse junk */
@@ -31,7 +31,8 @@ extern "C" {
 #define GC_MEAS_SILENCE_MS      800 /* trailing hush before silence-end commit */
 /* 1.0.8: NEZ M3U H:MM:SS (0:02:09 = 129s, not ~2s). */
 /* 1.0.9: trust M3U [250ms,15s] SFX + live silence-end SetLength for unlisted SFX. */
-/* 1.0.10: live SetLength for confident deferred measure (SFX + long loops ≥55s). */
+/* 1.0.10: live SetLength for confident deferred measure.
+ * 1.0.11: loop commit floor 55s -> 15s (Zelda II track3 ~38s). */
 /* Library placeholders — never expose these as TIME. */
 #define GC_DUMMY_GME_MS    150000 /* GME unknown play_length: 2:30 */
 #define GC_DUMMY_3MIN_MS   180000
