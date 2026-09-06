@@ -384,10 +384,8 @@ static void nsf_measure_restore(nsf_state *s, int track)
 
 /* NSFPlay APU-write loop detector (AUTO_DETECT / IsLooped). One-shot:
    LOOP_NUM=1 so GetLength is intro + one loop when a loop is found.
-   Use NSFPlay's stock DETECT_TIME/INT (30s/5s). */
-#define NSF_MEAS_MIN_LOOP_MS  8000
-#define NSF_MEAS_MIN_END_MS   10000
-
+   Use NSFPlay's stock DETECT_TIME/INT (30s/5s). Commit only confident
+   lengths: loop period (and end) >= 55s. Short phrase repeats are discarded. */
 static int nsf_eval_detect(xgm::NSF *nsf, int fade_ms)
 {
 	int end, loop, ms = 0;
@@ -395,13 +393,16 @@ static int nsf_eval_detect(xgm::NSF *nsf, int fade_ms)
 		return 0;
 	end = nsf->time_in_ms;
 	loop = nsf->loop_in_ms;
-	if (loop >= NSF_MEAS_MIN_LOOP_MS && end >= NSF_MEAS_MIN_END_MS)
+	/* Loop commit: one-loop period and intro+loop end both >= 55s. */
+	if (loop >= GC_MEAS_MIN_LOOP_MS && end >= GC_MEAS_MIN_LOOP_MS)
 		ms = end + (fade_ms > 0 ? fade_ms : 0);
-	else if (loop <= 0 && end >= NSF_MEAS_MIN_END_MS)
-		ms = end + (fade_ms > 0 ? fade_ms : 400);
+	/* Non-loop APU "end" is not used for SFX — silence-end is PCM-only. */
+	(void)loop;
 	if (ms > GC_CAP_MS)
 		ms = GC_CAP_MS;
-	if (ms > 0 && ms < NSF_MEAS_MIN_END_MS)
+	if (ms > 0 && ms < GC_MEAS_MIN_SANE_MS)
+		ms = 0;
+	if (ms > 0 && ms < GC_MEAS_MIN_LOOP_MS)
 		ms = 0;
 	if (gc_is_dummy_length_ms(ms))
 		ms += 1;
@@ -512,6 +513,7 @@ static int nsf_defer_poll(gc_eng_state *st)
 	budget = s->rate; /* ~1s measure audio per poll — finish ahead of realtime */
 
 	if (s->m_phase == 0) {
+		int go_pcm = 0;
 		while (advanced < budget && s->m_elapsed < s->m_detect_cap) {
 			s->mplayer->Skip((xgm::UINT32)chunk);
 			step_ms = (int)((int64_t)chunk * 1000 / s->rate);
@@ -521,13 +523,19 @@ static int nsf_defer_poll(gc_eng_state *st)
 			advanced += chunk;
 			if (s->mplayer->IsDetected()) {
 				int ms = nsf_eval_detect(s->mnsf, s->m_fade);
-				s->m_active = 0;
-				return ms > 0 ? ms : -1;
+				if (ms > 0) {
+					s->m_active = 0;
+					return ms;
+				}
+				/* Short/fragile detect — do NOT abort. Fall through to PCM
+				   silence scan for SFX; keep 10-min default for music. */
+				go_pcm = 1;
+				break;
 			}
 		}
-		if (s->m_elapsed < s->m_detect_cap)
+		if (!go_pcm && s->m_elapsed < s->m_detect_cap)
 			return 0;
-		/* No APU loop — restart for PCM silence / song-end scan on side player. */
+		/* No confident APU loop — restart for PCM silence (SFX) on side player. */
 		(*s->mconfig)["AUTO_DETECT"] = 0;
 		(*s->mconfig)["AUTO_STOP"] = 0;
 		s->mnsf->playtime_unknown = true;
@@ -569,12 +577,14 @@ static int nsf_defer_poll(gc_eng_state *st)
 				}
 			} else if (!loud) {
 				s->m_silent += step_ms;
-				if (s->m_silent >= 800) {
+				if (s->m_silent >= GC_MEAS_SILENCE_MS) {
 					int ms = s->m_last_peak + (s->m_fade > 0 ? s->m_fade : 400);
 					free(tmp);
 					s->m_active = 0;
+					/* SFX / one-shot only: heard audio, hush, total < 15s, no loop. */
 					if (ms > GC_CAP_MS) ms = GC_CAP_MS;
-					if (ms < 2500) { return -1; }
+					if (ms < GC_MEAS_MIN_SANE_MS || ms >= GC_MEAS_SFX_MAX_MS)
+						return -1;
 					if (gc_is_dummy_length_ms(ms)) ms += 1;
 					return ms;
 				}

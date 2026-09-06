@@ -1,4 +1,4 @@
-# xmp-gamemusic 1.0.5
+# xmp-gamemusic 1.0.6
 
 Native **32-bit** XMPlay input plugin for chip / console music.
 Display name **Game Music**. DLL `xmp-gamemusic.dll`.
@@ -10,7 +10,7 @@ of `in_nez.dll` or `in_notsofatso.dll`.
 Intended home: `Elrinth/xmplay_gamemusic_plugin`.
 
 Classic XMPlay is **32-bit only**. This DLL is PE32 i386.
-VERSIONINFO FILEVERSION is **1.0.5.0**; `PLUGIN_XMPVER` is **1000500**.
+VERSIONINFO FILEVERSION is **1.0.6.0**; `PLUGIN_XMPVER` is **1000600**.
 
 ## Install
 
@@ -68,6 +68,14 @@ an engine. Forcing GME on FM KSS will sound wrong — that is GME, not us.
 Forced stereo widen / reverb from old `xmp-gme` are **not** defaults.
 Stereo width default is **0**.
 
+## 1.0.6
+
+- **Confident lengths only:** commit a measured TIME only for one-loop/end **≥ ~55 s**, or short SFX silence-ends (**&lt; 15 s** after ≥800 ms hush). Phrase repeats in the 15–55 s band are discarded (keep the 10-minute default).
+- Rejected early NSFPlay detects no longer abort measure or re-enable live silence-cut on the 10-min placeholder (root cause of instant EOF while TIME still read 600000).
+- Never `SetLength` / `cap_frames` to a value that would end within ~500 ms of the current play position.
+- Length cache **v3** (ignores v2 and older); only confident lengths are stored.
+- Version **1.0.6**.
+
 ## 1.0.5
 
 - Untagged NSF/GBS/… default TIME is **10 minutes**; Open/GetFileInfo no longer block on one-loop measure.
@@ -101,7 +109,8 @@ NSF / GBS / KSS / AY / HES are multi-song (`GetSubSongs`,
   times): default TIME is **10 minutes** so Open stays instant. When
   **Measure untagged song lengths** is on (default), a one-loop /
   song-end scan runs **during playback** (NSFPlay APU detector, then
-  PCM). When it finishes, TIME updates via `SetLength` and is written
+  PCM). Only **confident** results commit (loop ≥55s, or SFX silence-end <15s).
+  When it finishes, TIME updates via `SetLength` and is written
   to the length cache for the next open. Length is intro + **one loop**
   + fade, or last audible + tail for one-shots.
 - The scan is capped at **Max untagged / scan cap** (default **180**
@@ -194,7 +203,7 @@ TIME.
 make          # host tests + dist/xmp-gamemusic.dll
 make dll
 make test
-make pack     # xmp-gamemusic-1.0.5.zip = dll + README.md
+make pack     # xmp-gamemusic-1.0.6.zip = dll + README.md
 ```
 
 Emulation cores are built at `-O2`.

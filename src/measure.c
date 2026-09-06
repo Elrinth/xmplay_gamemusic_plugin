@@ -3,8 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define GC_MEAS_MIN_LOOP_MS  8000
-#define GC_MEAS_SILENCE_MS    800
 #define GC_MEAS_TAIL_MS       400
 #define GC_MEAS_MAX_SIG      8192
 
@@ -47,6 +45,19 @@ static uint32_t window_sig(const float *st, int n)
 static int is_hush(uint32_t sig)
 {
 	return (sig & 0x7FFF) == 0;
+}
+
+/* Confident lengths only: long one-loop (>=55s) or short SFX silence-end (<15s). */
+static int confident_ms(int ms, int from_loop)
+{
+	if (ms < GC_MEAS_MIN_SANE_MS)
+		return 0;
+	if (from_loop)
+		return ms >= GC_MEAS_MIN_LOOP_MS ? ms : 0;
+	/* Silence / song-end path — SFX / one-shots only. */
+	if (ms >= GC_MEAS_SFX_MAX_MS)
+		return 0;
+	return ms;
 }
 
 int gc_measure_pcm_ms(const gc_eng_ops *ops, gc_eng_state *eng,
@@ -156,12 +167,7 @@ done:
 		ops->set_track(eng, track0);
 	if (result > cap_ms + (fade_ms > 0 ? fade_ms : 0))
 		result = cap_ms + (fade_ms > 0 ? fade_ms : 0);
-	/* Discard eager phrase-repeat PCM "loops" only — silence/end stays. */
-	if (from_loop && result > 0 &&
-	    result < GC_MEAS_MIN_LOOP_MS + (fade_ms > 0 ? fade_ms : 0))
-		result = 0;
-	if (result > 0 && result < 200)
-		result = 200;
+	result = confident_ms(result, from_loop);
 	if (gc_is_dummy_length_ms(result))
 		result += 1;
 	return result;

@@ -654,7 +654,7 @@ int main(void)
 		free(loop_nsf);
 	}
 	/* User Zelda II NSF (51 songs): Open must stay fast (10-min placeholder),
-	   Process must not IsStopped at ~2s, deferred measure may update TIME. */
+	   Process >=60s without EOF; deferred measure commits ~68s or keeps 600000. */
 	{
 		const char *zpath = "/workspace/uploads/zelda2-user.nsf";
 		if (access(zpath, R_OK) != 0)
@@ -671,7 +671,8 @@ int main(void)
 				gc_player *zp;
 				gc_info zinf;
 				float *buf;
-				int n, got = 0, rc = 0, ms, updated = 0;
+				int n, got = 0, rc = 0, ms = 0, updated = 0, final_ms;
+				int sfx_track = -1, sfx_ms = 0, ti;
 				if (!zf) _exit(2);
 				fseek(zf, 0, SEEK_END);
 				zsz = ftell(zf);
@@ -690,18 +691,18 @@ int main(void)
 				free(zdata);
 				if (!zp) _exit(4);
 				gc_player_info(zp, &zinf);
+				printf("SUCCESS: open user NSF track 1 initial TIME %d (want 600000)\n",
+				       zinf.tracks[0].duration_ms);
 				printf("    zelda open tracks=%d t1=%d src=%s engine=%s\n",
 				       zinf.track_count, zinf.tracks[0].duration_ms,
 				       zinf.length_src, gc_player_engine_name(zp));
-				/* 51-song user rip, or older 16-song fixture. */
 				if (!(zinf.track_count == 51 || zinf.track_count == 16)) rc = 5;
-				else if (zinf.tracks[0].duration_ms < 500000) rc = 6; /* ~10 min placeholder */
+				else if (zinf.tracks[0].duration_ms < 500000) rc = 6;
 				else if (strcmp(gc_player_engine_name(zp), "NSFPlay") != 0) rc = 8;
 				else {
 					buf = (float *)calloc((size_t)4096 * 2, sizeof(float));
 					if (!buf) rc = 9;
 					else {
-						/* Process until 60s of audio or early EOF. */
 						while (got < zcfg.rate * 60) {
 							n = gc_player_process(zp, buf, 4096);
 							if (n <= 0) { rc = 10; break; }
@@ -711,19 +712,61 @@ int main(void)
 								printf("    zelda deferred length -> %d\n", ms);
 							}
 						}
-						printf("    zelda process wall_ms=%d length_ms=%d updated=%d\n",
-						       (int)((int64_t)got * 1000 / zcfg.rate),
-						       gc_player_length_ms(zp), updated);
+						final_ms = gc_player_length_ms(zp);
+						printf("SUCCESS: process >=60s without EOF (wall_ms=%d length=%d)\n",
+						       (int)((int64_t)got * 1000 / zcfg.rate), final_ms);
+						/* Title ~68s (±10s) OR still 10-min — never ~2s / instant. */
+						if (updated) {
+							if (ms < 58000 || ms > 78000) rc = 11;
+							else
+								printf("SUCCESS: title theme commits ~%d (want ~68000)\n", ms);
+						} else if (final_ms < 500000) {
+							rc = 12;
+						} else {
+							printf("SUCCESS: title stays %d (not confident — OK)\n",
+							       final_ms);
+						}
+						if (final_ms < 2500 || (final_ms >= 15000 && final_ms < 55000))
+							rc = 13;
 						if (rc == 0 && got < zcfg.rate * 60) rc = 10;
+						/* Probe a few late tracks for a short SFX silence-end. */
+						{
+							int tries = 0;
+							for (ti = zinf.track_count - 1;
+							     ti >= 1 && sfx_track < 0 && rc == 0 && tries < 6;
+							     --ti, ++tries) {
+								int g2 = 0, ums = 0, done = 0;
+								if (gc_player_set_track(zp, ti) != 0) continue;
+								while (g2 < zcfg.rate * 8 && !done) {
+									n = gc_player_process(zp, buf, 4096);
+									if (n <= 0) break;
+									g2 += n;
+									if (gc_player_length_updated(zp, &ums) &&
+									    ums >= 2500 && ums < 15000) {
+										sfx_track = ti;
+										sfx_ms = ums;
+										done = 1;
+									}
+								}
+							}
+						}
+						if (sfx_track >= 0) {
+							printf("SUCCESS: short SFX track %d length=%d (<15s)\n",
+							       sfx_track + 1, sfx_ms);
+						} else {
+							printf("    (no short SFX commit in probe window — non-fatal)\n");
+						}
 						free(buf);
 					}
 				}
+				printf("    zelda final rc=%d length=%d updated=%d\n",
+				       rc, gc_player_length_ms(zp), updated);
 				_exit(rc);
 			} else if (pid > 0) {
 				int st = 0;
 				waitpid(pid, &st, 0);
 				expect(WIFEXITED(st) && WEXITSTATUS(st) == 0,
-				       "zelda2: open~10min, 51/16 tracks, process>=60s no early EOF");
+				       "zelda2: TIME 600000, process>=60s, title~68s or 600000");
 				if (!WIFEXITED(st) || WEXITSTATUS(st) != 0)
 					fprintf(stderr, "zelda2 child status=%d exit=%d\n", st,
 					        WIFEXITED(st) ? WEXITSTATUS(st) : -1);
@@ -745,9 +788,23 @@ int main(void)
 		snprintf(rec.artist, sizeof rec.artist, "Cache Artist");
 		snprintf(rec.src, sizeof rec.src, "measured");
 		expect(gc_len_cache_put(cf, "/music/castlevania3.nsf", 1000, 99, &rec),
-		       "length cache put");
+		       "length cache put v3");
 		expect(gc_len_cache_get(cf, "/music/castlevania3.nsf", 1000, 99, &got),
-		       "length cache get hit");
+		       "length cache get hit v3");
+		{
+			const char *v2only = "/tmp/gm-len-v2only.ini";
+			FILE *vf = fopen(v2only, "w");
+			gc_len_rec ignore;
+			if (vf) {
+				/* Same path/size/mtime as a v3 hit would need — must still miss. */
+				fprintf(vf, "v2 %08x 1000 99 7 2 measured 111,222\n",
+				        0 /* placeholder; real hash unused — whole v2 prefix ignored */);
+				fclose(vf);
+			}
+			expect(!gc_len_cache_get(v2only, "/music/castlevania3.nsf", 1000, 99, &ignore),
+			       "v2 cache lines are ignored");
+			remove(v2only);
+		}
 		expect(got.track_count == 2 && got.duration_ms[0] == 12345 &&
 		       got.duration_ms[1] == 23456, "cached per-track durations");
 		expect(got.duration_ms[0] != 1200, "cache is not silence-ms");

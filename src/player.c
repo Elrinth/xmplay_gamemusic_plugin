@@ -176,23 +176,35 @@ static int default_chip_play_ms(const gc_config *cfg, const gc_track_info *tr)
 	return gc_config_untagged_fallback_ms(cfg);
 }
 
+/* Accept only confident measured lengths:
+   - long one-loop / song (>= 55s), or
+   - short SFX silence-end (< 15s, >= 2.5s).
+   15–55s phrase repeats are discarded (keep 10-min default). */
+static int length_is_confident(int ms)
+{
+	if (ms < GC_MEAS_MIN_SANE_MS)
+		return 0;
+	if (ms < GC_MEAS_SFX_MAX_MS)
+		return 1;
+	if (ms >= GC_MEAS_MIN_LOOP_MS)
+		return 1;
+	return 0;
+}
+
 static int measure_one_track(gc_player *p, const gc_config *cfg, int track0)
 {
 	int cap = gc_config_untagged_cap_ms(cfg);
 	int fade = cfg ? cfg->fade_ms : GC_DEFAULT_FADE_MS;
 	int ms = 0;
-	/* Below this, treat as failed measure so GetFileInfo never advertises
-	   1–2 s TIME (XMPlay may skip / instant-fade those subsongs). */
-	const int min_sane = 2500;
 	if (fade < 0)
 		fade = 0;
 	if (p->ops && p->ops->measure_ms)
 		ms = p->ops->measure_ms(p->eng, track0, cap, fade);
-	if (ms > 0 && ms < min_sane)
+	if (ms > 0 && !length_is_confident(ms))
 		ms = 0;
 	if (ms <= 0)
 		ms = gc_measure_pcm_ms(p->ops, p->eng, track0, p->rate, cap, fade);
-	if (ms > 0 && ms < min_sane)
+	if (ms > 0 && !length_is_confident(ms))
 		ms = 0;
 	if (ms <= 0)
 		return 0;
@@ -226,7 +238,8 @@ static void apply_chip_defaults(gc_player *p, const gc_config *cfg, const gc_len
 			continue;
 		}
 		p->track_tagged[i] = 0;
-		if (cache && i < cache->track_count && cache->duration_ms[i] > 0 &&
+		if (cache && i < cache->track_count &&
+		    length_is_confident(cache->duration_ms[i]) &&
 		    !gc_is_dummy_length_ms(cache->duration_ms[i])) {
 			p->info.tracks[i].duration_ms = cache->duration_ms[i];
 			did_cache = 1;
@@ -257,32 +270,54 @@ static void apply_chip_defaults(gc_player *p, const gc_config *cfg, const gc_len
 static void cache_store_lengths(gc_player *p)
 {
 	gc_len_rec rec;
+	int i, any = 0;
 	if (!p || !p->cache_path[0] || !p->cache_key[0])
 		return;
 	gc_len_rec_from_info(&rec, &p->info);
+	/* Cache v3 stores only confident lengths; untagged default / pending -> 0. */
+	for (i = 0; i < rec.track_count && i < GC_MAX_TRACKS; ++i) {
+		int ms = rec.duration_ms[i];
+		if (p->track_pending_measure[i] ||
+		    (p->untagged_fallback_ms > 0 && ms == p->untagged_fallback_ms) ||
+		    !length_is_confident(ms)) {
+			rec.duration_ms[i] = 0;
+		} else {
+			any = 1;
+		}
+	}
+	if (!any)
+		return;
 	snprintf(rec.src, sizeof rec.src, "measured");
 	gc_len_cache_put(p->cache_path, p->cache_key, p->cache_size, p->cache_mtime, &rec);
 }
 
 static void apply_measured_length(gc_player *p, int track0, int ms)
 {
+	int played_ms, remain;
 	if (!p || track0 < 0 || track0 >= GC_MAX_TRACKS || ms <= 0)
 		return;
 	if (ms > GC_CAP_MS)
 		ms = GC_CAP_MS;
 	if (gc_is_dummy_length_ms(ms))
 		ms += 1;
+	if (!length_is_confident(ms)) {
+		/* Fragile / mid-range phrase — keep 10-min default, stop retrying. */
+		p->track_pending_measure[track0] = 0;
+		return;
+	}
+	played_ms = (int)((int64_t)p->frames_played * 1000 / (p->rate > 0 ? p->rate : 1));
+	remain = ms - played_ms;
+	/* Never SetLength/cap to something that ends within ~500ms of now
+	   (bad measure racing in at t≈0 or late short detect → instant skip). */
+	if (track0 == p->track && remain < GC_LEN_APPLY_GUARD_MS) {
+		p->track_pending_measure[track0] = 0;
+		return;
+	}
 	p->info.tracks[track0].duration_ms = ms;
 	p->track_pending_measure[track0] = 0;
 	if (track0 == p->track) {
-		int played_ms = (int)((int64_t)p->frames_played * 1000 / (p->rate > 0 ? p->rate : 1));
 		p->length_ms = ms;
 		p->cap_frames = (int)((int64_t)ms * p->rate / 1000);
-		/* If measure finished after we already passed the new end, stop soon. */
-		if (played_ms >= ms && p->cap_frames > p->frames_played)
-			p->cap_frames = p->frames_played + (p->rate / 20);
-		else if (played_ms >= ms)
-			p->cap_frames = p->frames_played;
 		snprintf(p->info.length_src, sizeof p->info.length_src, "measured");
 		p->length_dirty = 1;
 		p->length_dirty_ms = ms;
@@ -691,16 +726,14 @@ int gc_player_process(gc_player *p, float *stereo, int frames)
 	if (got <= 0)
 		return 0;
 	/* Never promote silence-detect / AUTO_STOP into advertised TIME.
-	   Tagged lengths and measured / untagged-max TIME are already set.
-	   Only run post-audio silence auto-advance on the long untagged-max
-	   TIME (song may end before the scan cap). Mid-song rests in a
-	   measured one-loop must not end the track — that cut Zelda II NSF
-	   (and similar) after ~1–2 s of hush and sounded like an instant fade. */
+	   Deferred measure owns SFX silence-ends. Live silence-cut on the
+	   10-min untagged fallback caused instant EOF after a rejected early
+	   APU detect cleared pending (TIME still 600000). Skip silence-cut
+	   entirely when this player uses an untagged fallback TIME. */
 	if (p->silence_ms > 0 &&
+	    p->untagged_fallback_ms <= 0 &&
 	    !(p->protect_tagged && p->track < GC_MAX_TRACKS && p->track_tagged[p->track]) &&
-	    !(p->track < GC_MAX_TRACKS && p->track_pending_measure[p->track]) &&
-	    !(p->length_ms > 0 && p->untagged_fallback_ms > 0 &&
-	      p->length_ms != p->untagged_fallback_ms)) {
+	    !(p->track < GC_MAX_TRACKS && p->track_pending_measure[p->track])) {
 		int i, keep = got;
 		float thr = 1.5e-3f;
 		for (i = 0; i < got; ++i) {

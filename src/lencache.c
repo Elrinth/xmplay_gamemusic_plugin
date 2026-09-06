@@ -134,7 +134,7 @@ int gc_len_cache_get(const char *cache_file, const char *path,
 		src[0] = csv[0] = game[0] = artist[0] = '\0';
 		if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
 			continue;
-		if (strncmp(line, "v2 ", 3) == 0) {
+		if (strncmp(line, "v3 ", 3) == 0) {
 			if (sscanf(line + 3, "%x %llu %lld %d %d %31s %4095s",
 			           &hex, &sz, &mt, &fmt, &n, src, csv) < 6)
 				continue;
@@ -205,7 +205,7 @@ int gc_len_cache_put(const char *cache_file, const char *path,
 	n = in->track_count;
 	if (n > GC_MAX_TRACKS)
 		n = GC_MAX_TRACKS;
-	fprintf(f, "v2 %08x %llu %lld %d %d %s ",
+	fprintf(f, "v3 %08x %llu %lld %d %d %s ",
 	        hex, (unsigned long long)size, (long long)mtime,
 	        (int)in->format, n, in->src[0] ? in->src : "measured");
 	for (i = 0; i < n; ++i)
